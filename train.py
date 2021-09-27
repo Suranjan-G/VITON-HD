@@ -1,0 +1,191 @@
+import argparse
+import os
+import wandb
+from tqdm import tqdm
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+from torch.cuda import amp
+from torch import autograd
+import torchgeometry as tgm
+
+from train_datasets import VITONDataset, VITONDataLoader
+from networks import SegGenerator, GMM, ALIASGenerator, MultiscaleDiscriminator
+from utils import gen_noise, set_grads, load_checkpoint
+
+
+def get_opt():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--name', type=str, required=True)
+
+    parser.add_argument('-b', '--batch_size', type=int, default=1)
+    parser.add_argument('-j', '--workers', type=int, default=1)
+    parser.add_argument('--load_height', type=int, default=1024)
+    parser.add_argument('--load_width', type=int, default=768)
+    parser.add_argument('--shuffle', action='store_true')
+
+    parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
+    parser.add_argument('--use_amp', action='store_true', help="Use mixed precision training.")
+
+    parser.add_argument('--dataset_dir', type=str, default='./datasets/')
+    parser.add_argument('--dataset_mode', type=str, default='train')
+    parser.add_argument('--dataset_list', type=str, default='test_pairs.txt')
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints/')
+    parser.add_argument('--save_dir', type=str, default='./results/')
+
+    parser.add_argument('--seg_checkpoint', type=str, default='seg_final.pth')
+    parser.add_argument('--gmm_checkpoint', type=str, default='gmm_final.pth')
+    parser.add_argument('--alias_checkpoint', type=str, default='alias_final.pth')
+
+    # common
+    parser.add_argument('--semantic_nc', type=int, default=13, help='# of human-parsing map classes')
+    parser.add_argument('--init_type', choices=['normal', 'xavier', 'xavier_uniform', 'kaiming', 'orthogonal', 'none'], default='xavier')
+    parser.add_argument('--init_variance', type=float, default=0.02, help='variance of the initialization distribution')
+    parser.add_argument('--use_lsgan', action='store_true', help="Use Least Squares GAN loss.")
+
+    # for GMM
+    parser.add_argument('--grid_size', type=int, default=5)
+
+    # for ALIASGenerator
+    parser.add_argument('--norm_G', type=str, default='spectralaliasinstance')
+    parser.add_argument('--ngf', type=int, default=64, help='# of generator filters in the first conv layer')
+    parser.add_argument('--num_upsampling_layers', choices=['normal', 'more', 'most'], default='most',
+                        help='If \'more\', add upsampling layer between the two middle resnet blocks. '
+                             'If \'most\', also add one more (upsampling + resnet) layer at the end of the generator.')
+
+    opt = parser.parse_args()
+    if opt.use_wandb:
+        wandb.init(project="VITON-HD")
+        wandb.config.update(opt)
+        return wandb.config
+    else:
+        return opt
+
+
+def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
+    up = nn.Upsample(size=(opt.load_height, opt.load_width), mode='bilinear')
+    gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).cuda()
+
+    parse_labels = {
+        0:  ['background',  [0]],
+        1:  ['paste',       [2, 4, 7, 8, 9, 10, 11]],   # contains face and lower body.
+        2:  ['upper',       [3]],
+        3:  ['hair',        [1]],
+        4:  ['left_arm',    [5]],
+        5:  ['right_arm',   [6]],
+        6:  ['noise',       [12]]
+    }
+
+    train_dataset = VITONDataset(opt)
+    train_loader = VITONDataLoader(opt, train_dataset)
+
+    criterion_gan = nn.MSELoss() if opt.use_lsgan else nn.CrossEntropyLoss()
+    criterion_ce = nn.CrossEntropyLoss()
+
+    optimizer_seg = torch.optim.Adam(list(segG.parameters()) + list(segD.parameters()),
+                                    lr=0.0004, betas=(0.5,0.999))
+
+    with tqdm(enumerate(train_loader.data_loader)) as pbar:
+        for i, inputs in pbar:
+            img = inputs['img'].cuda()
+            img_agnostic = inputs['img_agnostic'].cuda()
+            parse_target = inputs['parse_target'].cuda()
+            parse_target_down = inputs['parse_target_down'].cuda()
+            parse_agnostic = inputs['parse_agnostic'].cuda()
+            pose = inputs['pose'].cuda()
+            c = inputs['cloth']['unpaired'].cuda()
+            cm = inputs['cloth_mask']['unpaired'].cuda()
+
+            with amp.autocast(enabled=opt.use_amp):
+                # Part 1. Segmentation generation
+                parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
+                pose_down = F.interpolate(pose, size=(256, 192), mode='bilinear')
+                c_masked_down = F.interpolate(c * cm, size=(256, 192), mode='bilinear')
+                cm_down = F.interpolate(cm, size=(256, 192), mode='bilinear')
+                seg_input = torch.cat((cm_down, c_masked_down, parse_agnostic_down, pose_down, gen_noise(cm_down.size(), device='cuda')), dim=1)
+
+                parse_pred_down = segG(seg_input)
+
+                lambda_ce = 10
+                seg_loss = lambda_ce * criterion_ce(parse_pred_down, parse_target_down)
+                
+                fake_out = segD(parse_pred_down)
+                real_out = segD(parse_target_down)
+                seg_loss += criterion_gan(fake_out, torch.ones_like(fake_out))                          # Treat fake images as real to train the Generator.
+                seg_lossD = (criterion_gan(real_out, torch.empty_like(real_out).uniform_(0.9, 1.0))     # Treat real as real
+                        + criterion_gan(fake_out, torch.empty_like(fake_out).uniform_(0.0, 0.1)))   # and fake as fake to train Discriminator.
+
+                scaled_gradsG = autograd.grad(scaler.scale(seg_loss), segG.parameters(), retain_graph=True)
+                scaled_gradsD = autograd.grad(scaler.scale(seg_lossD), segD.parameters())
+
+                set_grads(scaled_gradsG, segG.parameters())
+                set_grads(scaled_gradsD, segD.parameters())
+
+                scaler.step(optimizer_seg)
+                optimizer_seg.zero_grad(set_to_none=True)
+                scaler.update()
+
+                         # conditional adversarial loss
+
+
+                # # convert 13 channel body parse to 7 channel parse.
+                # parse_pred = gauss(up(parse_pred_down))
+                # parse_pred = parse_pred.argmax(dim=1, keepdim=True)
+                # parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
+                # parse_old.scatter_(1, parse_pred, 1.0)
+
+                # parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
+                # for j in range(len(parse_labels)):
+                #     for lbl in parse_labels[j][1]:
+                #         parse[:, j] += parse_old[:, lbl]
+
+                # # Part 2. Clothes Deformation
+                # agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
+                # parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
+                # pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
+                # c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
+                # gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
+
+                # _, warped_grid = gmm(gmm_input, c_gmm)
+                # warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
+                # warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
+
+                # # Part 3. Try-on synthesis
+                # misalign_mask = parse[:, 2:3] - warped_cm
+                # misalign_mask[misalign_mask < 0.0] = 0.0
+                # parse_div = torch.cat((parse, misalign_mask), dim=1)
+                # parse_div[:, 2:3] -= misalign_mask
+
+                # output = alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
+
+def main():
+    opt = get_opt()
+    print(opt)
+
+    if not os.path.exists(os.path.join(opt.save_dir, opt.name)):
+        os.makedirs(os.path.join(opt.save_dir, opt.name))
+
+    segG = SegGenerator(opt, input_nc=opt.semantic_nc + 8, output_nc=opt.semantic_nc)
+    segD = MultiscaleDiscriminator(opt, opt.semantic_nc)
+    gmm = GMM(opt, inputA_nc=7, inputB_nc=3)
+    opt.semantic_nc = 7
+    alias = ALIASGenerator(opt, input_nc=9)
+    opt.semantic_nc = 13
+
+    load_checkpoint(segG, os.path.join(opt.checkpoint_dir, opt.seg_checkpoint))
+    load_checkpoint(gmm, os.path.join(opt.checkpoint_dir, opt.gmm_checkpoint))
+    load_checkpoint(alias, os.path.join(opt.checkpoint_dir, opt.alias_checkpoint))
+
+    segG.cuda().train()
+    segD.cuda().train()
+    gmm.cuda().train()
+    alias.cuda().train()
+
+    scaler = amp.GradScaler(enabled=opt.use_amp)
+
+    train(opt, segG, segD, gmm, alias, scaler)
+
+
+if __name__ == '__main__':
+    main()

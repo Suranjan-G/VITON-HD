@@ -6,14 +6,12 @@ from PIL import Image
 import torch
 
 
-def gen_noise(shape):
-    noise = np.zeros(shape, dtype=np.uint8)
-    ### noise
-    noise = cv2.randn(noise, 0, 255)
-    noise = np.asarray(noise / 255, dtype=np.uint8)
-    noise = torch.tensor(noise, dtype=torch.float32)
-    return noise
+def gen_noise(shape, device='cuda'):
+    return torch.randn(shape, dtype=torch.float32, device=device)
 
+def set_grads(grads, params):
+    for g,p in zip(grads, params):
+        p.grad = g
 
 def save_images(img_tensors, img_names, save_dir):
     for img_tensor, img_name in zip(img_tensors, img_names):
