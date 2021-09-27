@@ -10,9 +10,6 @@ from torch.nn.utils.spectral_norm import spectral_norm
 #                                                     Common classes
 # ----------------------------------------------------------------------------------------------------------------------
 class BaseNetwork(nn.Module):
-    def __init__(self):
-        super(BaseNetwork, self).__init__()
-
     def print_network(self):
         num_params = 0
         for param in self.parameters():
@@ -54,13 +51,13 @@ class BaseNetwork(nn.Module):
 class MultiscaleDiscriminator(BaseNetwork):
     def __init__(self, opt, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d,
                  use_sigmoid=False, num_D=2, getIntermFeat=False):
-        super(MultiscaleDiscriminator, self).__init__()
+        super().__init__()
         self.num_D = num_D
         self.n_layers = n_layers
         self.getIntermFeat = getIntermFeat
 
         for i in range(num_D):
-            netD = NLayerDiscriminator(input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
+            netD = NLayerDiscriminator(opt, input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
             if getIntermFeat:
                 for j in range(n_layers + 2):
                     setattr(self, 'scale' + str(i) + '_layer' + str(j), getattr(netD, 'model' + str(j)))
@@ -99,7 +96,7 @@ class MultiscaleDiscriminator(BaseNetwork):
 # Define the PatchGAN discriminator with the specified arguments.
 class NLayerDiscriminator(BaseNetwork):
     def __init__(self, opt, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, getIntermFeat=False):
-        super(NLayerDiscriminator, self).__init__()
+        super().__init__()
         self.getIntermFeat = getIntermFeat
         self.n_layers = n_layers
 
@@ -157,7 +154,7 @@ class NLayerDiscriminator(BaseNetwork):
 # ----------------------------------------------------------------------------------------------------------------------
 class SegGenerator(BaseNetwork):
     def __init__(self, opt, input_nc, output_nc=13, norm_layer=nn.InstanceNorm2d):
-        super(SegGenerator, self).__init__()
+        super().__init__()
 
         self.conv1 = nn.Sequential(nn.Conv2d(input_nc, 64, kernel_size=3, padding=1), norm_layer(64), nn.ReLU(),
                                    nn.Conv2d(64, 64, kernel_size=3, padding=1), norm_layer(64), nn.ReLU())
@@ -221,7 +218,7 @@ class SegGenerator(BaseNetwork):
 # ----------------------------------------------------------------------------------------------------------------------
 class FeatureExtraction(BaseNetwork):
     def __init__(self, input_nc, ngf=64, num_layers=4, norm_layer=nn.BatchNorm2d):
-        super(FeatureExtraction, self).__init__()
+        super().__init__()
 
         nf = ngf
         layers = [nn.Conv2d(input_nc, nf, kernel_size=4, stride=2, padding=1), nn.ReLU(), norm_layer(nf)]
@@ -243,7 +240,7 @@ class FeatureExtraction(BaseNetwork):
 
 class FeatureCorrelation(nn.Module):
     def __init__(self):
-        super(FeatureCorrelation, self).__init__()
+        super().__init__()
 
     def forward(self, featureA, featureB):
         # Reshape features for matrix multiplication.
@@ -258,7 +255,7 @@ class FeatureCorrelation(nn.Module):
 
 class FeatureRegression(nn.Module):
     def __init__(self, input_nc=512, output_size=6, norm_layer=nn.BatchNorm2d):
-        super(FeatureRegression, self).__init__()
+        super().__init__()
 
         self.conv = nn.Sequential(
             nn.Conv2d(input_nc, 512, kernel_size=4, stride=2, padding=1), norm_layer(512), nn.ReLU(),
@@ -277,7 +274,7 @@ class FeatureRegression(nn.Module):
 
 class TpsGridGen(nn.Module):
     def __init__(self, opt, dtype=torch.float):
-        super(TpsGridGen, self).__init__()
+        super().__init__()
 
         # Create a grid in numpy.
         # TODO: set an appropriate interval ([-1, 1] in CP-VTON, [-0.9, 0.9] in the current version of VITON-HD)
@@ -408,7 +405,7 @@ class TpsGridGen(nn.Module):
 
 class GMM(nn.Module):
     def __init__(self, opt, inputA_nc, inputB_nc):
-        super(GMM, self).__init__()
+        super().__init__()
 
         self.extractionA = FeatureExtraction(inputA_nc, ngf=64, num_layers=4)
         self.extractionB = FeatureExtraction(inputB_nc, ngf=64, num_layers=4)
@@ -432,7 +429,7 @@ class GMM(nn.Module):
 # ----------------------------------------------------------------------------------------------------------------------
 class MaskNorm(nn.Module):
     def __init__(self, norm_nc):
-        super(MaskNorm, self).__init__()
+        super().__init__()
 
         self.norm_layer = nn.InstanceNorm2d(norm_nc, affine=False)
 
@@ -455,7 +452,7 @@ class MaskNorm(nn.Module):
 
 class ALIASNorm(nn.Module):
     def __init__(self, norm_type, norm_nc, label_nc):
-        super(ALIASNorm, self).__init__()
+        super().__init__()
 
         self.noise_scale = nn.Parameter(torch.zeros(norm_nc))
 
@@ -501,7 +498,7 @@ class ALIASNorm(nn.Module):
 
 class ALIASResBlock(nn.Module):
     def __init__(self, opt, input_nc, output_nc, use_mask_norm=True):
-        super(ALIASResBlock, self).__init__()
+        super().__init__()
 
         self.learned_shortcut = (input_nc != output_nc)
         middle_nc = min(input_nc, output_nc)
@@ -552,7 +549,7 @@ class ALIASResBlock(nn.Module):
 
 class ALIASGenerator(BaseNetwork):
     def __init__(self, opt, input_nc):
-        super(ALIASGenerator, self).__init__()
+        super().__init__()
         self.num_upsampling_layers = opt.num_upsampling_layers
 
         self.sh, self.sw = self.compute_latent_vector_size(opt)

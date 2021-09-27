@@ -59,7 +59,7 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 parse_pred_down = segG(seg_input)
 
                 lambda_ce = 10
-                seg_loss = lambda_ce * criterion_ce(parse_pred_down, parse_target_down)
+                seg_loss = lambda_ce * criterion_ce(parse_pred_down, parse_target_down.argmax(dim=1, keepdim=True))
                 
                 fake_out = segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
                 real_out = segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
@@ -83,6 +83,8 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 # parse_pred = parse_pred.argmax(dim=1, keepdim=True)
                 # parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
                 # parse_old.scatter_(1, parse_pred, 1.0)
+
+                # VERIFY MEMORY FORMAT AND CHANNEL LAST HERE
 
                 # parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
                 # for j in range(len(parse_labels)):
@@ -111,9 +113,6 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
 def main():
     opt = get_opt()
     print(opt)
-
-    if not os.path.exists(os.path.join(opt.save_dir, opt.name)):
-        os.makedirs(os.path.join(opt.save_dir, opt.name))
 
     segG = SegGenerator(opt, input_nc=opt.semantic_nc + 8, output_nc=opt.semantic_nc)
     segD = MultiscaleDiscriminator(opt, opt.semantic_nc)
