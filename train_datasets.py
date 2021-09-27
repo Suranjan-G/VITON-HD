@@ -6,18 +6,18 @@ from PIL import Image, ImageDraw
 import torch
 from torch.utils import data
 from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 
 
 # TODO: Flip augmentation for training.
-# TODO: Channels last memory format
-
 
 class VITONDataset(data.Dataset):
     def __init__(self, opt):
-        super(VITONDataset, self).__init__()
+        super().__init__()
         self.load_height = opt.load_height
         self.load_width = opt.load_width
         self.semantic_nc = opt.semantic_nc
+        self.memory_format = torch.channels_last if opt.memory_format == "channels_last" else torch.contiguous_format
         self.data_path = osp.join(opt.dataset_dir, opt.dataset_mode)
         self.transform = transforms.Compose([
             transforms.ToTensor(),
@@ -25,17 +25,8 @@ class VITONDataset(data.Dataset):
         ])
 
         # load data list
-        img_names = []
-        c_names = []
-        with open(osp.join(opt.dataset_dir, opt.dataset_list), 'r') as f:
-            for line in f.readlines():
-                img_name, c_name = line.strip().split()
-                img_names.append(img_name)
-                c_names.append(c_name)
-
-        self.img_names = img_names
-        self.c_names = dict()
-        self.c_names['unpaired'] = c_names
+        self.img_names = []
+        self.c_names = []
 
     def get_parse_agnostic(self, parse, pose_data):
         parse_array = np.asarray(parse)
@@ -121,26 +112,22 @@ class VITONDataset(data.Dataset):
 
     def __getitem__(self, index):
         img_name = self.img_names[index]
-        c_name = {}
-        c = {}
-        cm = {}
-        for key in self.c_names:
-            c_name[key] = self.c_names[key][index]
-            c[key] = Image.open(osp.join(self.data_path, 'cloth', c_name[key])).convert('RGB')
-            c[key] = transforms.Resize((self.load_height, self.load_width), interpolation=2)(c[key])
-            cm[key] = Image.open(osp.join(self.data_path, 'cloth-mask', c_name[key]))
-            cm[key] = transforms.Resize((self.load_height, self.load_width), interpolation=0)(cm[key])
+        c_name = self.c_names[index]
+        c = Image.open(osp.join(self.data_path, 'cloth', c_name)).convert('RGB')
+        c = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(c)
+        cm = Image.open(osp.join(self.data_path, 'cloth-mask', c_name))
+        cm = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)(cm)
 
-            c[key] = self.transform(c[key])  # [-1,1]
-            cm_array = np.asarray(cm[key])
-            cm_array = (cm_array >= 128).astype(np.float32)
-            cm[key] = torch.from_numpy(cm_array)  # [0,1]
-            cm[key].unsqueeze_(0)
+        c = self.transform(c)  # [-1,1]
+        cm_array = np.asarray(cm)
+        cm_array = (cm_array >= 128).astype(np.float32)
+        cm = torch.from_numpy(cm_array)  # [0,1]
+        cm.unsqueeze_(0)
 
         # load pose image
         pose_name = img_name.replace('.jpg', '_rendered.png')
         pose_rgb = Image.open(osp.join(self.data_path, 'openpose-img', pose_name))
-        pose_rgb = transforms.Resize((self.load_height, self.load_width), interpolation=2)(pose_rgb)
+        pose_rgb = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(pose_rgb)
         pose_rgb = self.transform(pose_rgb)  # [-1,1]
 
         pose_name = img_name.replace('.jpg', '_keypoints.json')
@@ -153,10 +140,16 @@ class VITONDataset(data.Dataset):
         # load parsing image
         parse_name = img_name.replace('.jpg', '.png')
         parse = Image.open(osp.join(self.data_path, 'image-parse', parse_name))
-        parse_down = transforms.Resize((256, 192), interpolation=0)(parse)
-        parse = transforms.Resize((self.load_height, self.load_width), interpolation=0)(parse)
+        parse_down = transforms.Resize((256, 192), interpolation=InterpolationMode.NEAREST)(parse)
+        parse_down = torch.from_numpy(np.asarray(parse_down)[None]).long()
+        parse_down_map = torch.empty(1, self.semantic_nc, 256, 192, dtype=torch.float, pin_memory=True, memory_format=self.memory_format).fill_(0.0)
+        parse_down_map[0].scatter_(0, parse_down, 1.0)
+
+        parse = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)(parse)
         parse_agnostic = self.get_parse_agnostic(parse, pose_data)
         parse_agnostic = torch.from_numpy(np.asarray(parse_agnostic)[None]).long()
+        parse_agnostic_map = torch.zeros(20, self.load_height, self.load_width, dtype=torch.float)
+        parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 
         labels = {
             0: ['background', [0, 10]],
@@ -173,27 +166,22 @@ class VITONDataset(data.Dataset):
             11: ['socks', [8]],
             12: ['noise', [3, 11]]
         }
-        parse_agnostic_map = torch.zeros(20, self.load_height, self.load_width, dtype=torch.float)
-        parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
-        new_parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
+        new_parse_agnostic_map = torch.empty(1, self.semantic_nc, self.load_height, self.load_width, dtype=torch.float, pin_memory=True, memory_format=self.memory_format).fill_(0.0)
         for i in range(len(labels)):
             for label in labels[i][1]:
-                new_parse_agnostic_map[i] += parse_agnostic_map[label]
+                new_parse_agnostic_map[0][i] += parse_agnostic_map[label]
 
         # load person image
-        img = Image.open(osp.join(self.data_path, 'image', img_name))
-        img = transforms.Resize((self.load_height, self.load_width), interpolation=2)(img)
-        img_agnostic = self.get_img_agnostic(img, parse, pose_data)
-        img = self.transform(img)
-        img_agnostic = self.transform(img_agnostic)  # [-1,1]
+        # img = Image.open(osp.join(self.data_path, 'image', img_name))
+        # img = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(img)
+        # img_agnostic = self.get_img_agnostic(img, parse, pose_data)
+        # img = self.transform(img)
+        # img_agnostic = self.transform(img_agnostic)  # [-1,1]
 
         result = {
-            'img_name': img_name,
-            'c_name': c_name,
-            'img': img,
-            'img_agnostic': img_agnostic,
-            'parse_target': parse,
-            'parse_target_down': parse_down,
+            # 'img': img,
+            # 'img_agnostic': img_agnostic,
+            'parse_target_down': parse_down_map,
             'parse_agnostic': new_parse_agnostic_map,
             'pose': pose_rgb,
             'cloth': c,
@@ -204,10 +192,16 @@ class VITONDataset(data.Dataset):
     def __len__(self):
         return len(self.img_names)
 
+    def collate_fn(self, data_batch):
+        result = {}
+        for key in data_batch[0].keys():
+            result[key] = [inpd[key].to(memory_format=self.memory_format).pin_memory() for inpd in data_batch]
+        return result
+
 
 class VITONDataLoader:
     def __init__(self, opt, dataset):
-        super(VITONDataLoader, self).__init__()
+        super().__init__()
 
         if opt.shuffle:
             train_sampler = data.sampler.RandomSampler(dataset)
@@ -216,7 +210,8 @@ class VITONDataLoader:
 
         self.data_loader = data.DataLoader(
                 dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
-                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=train_sampler
+                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=train_sampler,
+                collate_fn=dataset.collate_fn
         )
         self.dataset = dataset
         self.data_iter = self.data_loader.__iter__()
