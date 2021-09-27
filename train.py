@@ -110,11 +110,11 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 lambda_ce = 10
                 seg_loss = lambda_ce * criterion_ce(parse_pred_down, parse_target_down)
                 
-                fake_out = segD(parse_pred_down)
-                real_out = segD(parse_target_down)
+                fake_out = segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
+                real_out = segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
                 seg_loss += criterion_gan(fake_out, torch.ones_like(fake_out))                          # Treat fake images as real to train the Generator.
                 seg_lossD = (criterion_gan(real_out, torch.empty_like(real_out).uniform_(0.9, 1.0))     # Treat real as real
-                        + criterion_gan(fake_out, torch.empty_like(fake_out).uniform_(0.0, 0.1)))   # and fake as fake to train Discriminator.
+                           + criterion_gan(fake_out, torch.empty_like(fake_out).uniform_(0.0, 0.1)))   # and fake as fake to train Discriminator.
 
                 scaled_gradsG = autograd.grad(scaler.scale(seg_loss), segG.parameters(), retain_graph=True)
                 scaled_gradsD = autograd.grad(scaler.scale(seg_lossD), segD.parameters())
@@ -125,8 +125,6 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 scaler.step(optimizer_seg)
                 optimizer_seg.zero_grad(set_to_none=True)
                 scaler.update()
-
-                         # conditional adversarial loss
 
 
                 # # convert 13 channel body parse to 7 channel parse.
