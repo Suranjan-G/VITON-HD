@@ -151,7 +151,7 @@ class NLayerDiscriminator(BaseNetwork):
 
 class GANLoss(nn.Module):
     def __init__(self, use_lsgan=True):
-        super(GANLoss, self).__init__()
+        super().__init__()
         if use_lsgan:
             self.loss = nn.MSELoss()
         else:

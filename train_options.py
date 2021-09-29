@@ -28,7 +28,7 @@ def get_opt():
     parser.add_argument('--semantic_nc', type=int, default=13, help='# of human-parsing map classes')
     parser.add_argument('--init_type', choices=['normal', 'xavier', 'xavier_uniform', 'kaiming', 'orthogonal', 'none'], default='xavier')
     parser.add_argument('--init_variance', type=float, default=0.02, help='variance of the initialization distribution')
-    parser.add_argument('--use_lsgan', action='store_true', help="Use Least Squares GAN loss.")
+    parser.add_argument('--no_lsgan', action='store_true', help="Not use Least Squares GAN loss.")
 
     # for GMM
     parser.add_argument('--grid_size', type=int, default=5)

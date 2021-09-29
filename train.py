@@ -32,8 +32,7 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
     train_dataset = VITONDataset(opt)
     train_loader = VITONDataLoader(opt, train_dataset)
 
-    criterion_gan = nn.MSELoss() if opt.use_lsgan else nn.CrossEntropyLoss()
-    criterion_gan = GANLoss(use_lsgan=opt.use_lsgan)
+    criterion_gan = GANLoss(use_lsgan=not opt.no_lsgan)
     ce_loss = nn.CrossEntropyLoss()
 
     optimizer_seg = torch.optim.Adam(list(segG.parameters()) + list(segD.parameters()),
