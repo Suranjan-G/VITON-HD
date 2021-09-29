@@ -33,7 +33,7 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
     train_loader = VITONDataLoader(opt, train_dataset)
 
     criterion_gan = nn.MSELoss() if opt.use_lsgan else nn.CrossEntropyLoss()
-    criterion_ce = nn.CrossEntropyLoss()
+    ce_loss = nn.CrossEntropyLoss()
 
     optimizer_seg = torch.optim.Adam(list(segG.parameters()) + list(segD.parameters()),
                                     lr=0.0004, betas=(0.5,0.999))
@@ -59,7 +59,7 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 parse_pred_down = segG(seg_input)
 
                 lambda_ce = 10
-                seg_loss = lambda_ce * criterion_ce(parse_pred_down, parse_target_down.argmax(dim=1, keepdim=True))
+                seg_loss = lambda_ce * ce_loss(parse_pred_down, parse_target_down.argmax(dim=1, keepdim=True))
                 
                 fake_out = segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
                 real_out = segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
