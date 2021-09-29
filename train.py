@@ -67,55 +67,55 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 seg_lossD = (criterion_gan(real_out, True)     # Treat real as real
                            + criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.
 
-                scaled_gradsG = autograd.grad(scaler.scale(seg_loss), segG.parameters(), retain_graph=True)
-                scaled_gradsD = autograd.grad(scaler.scale(seg_lossD), segD.parameters())
+            scaled_gradsG = autograd.grad(scaler.scale(seg_loss), segG.parameters(), retain_graph=True)
+            scaled_gradsD = autograd.grad(scaler.scale(seg_lossD), segD.parameters())
 
-                set_grads(scaled_gradsG, segG.parameters())
-                set_grads(scaled_gradsD, segD.parameters())
+            set_grads(scaled_gradsG, segG.parameters())
+            set_grads(scaled_gradsD, segD.parameters())
 
-                scaler.step(optimizer_seg)
-                optimizer_seg.zero_grad(set_to_none=True)
-                scaler.update()
+            scaler.step(optimizer_seg)
+            optimizer_seg.zero_grad(set_to_none=True)
+            scaler.update()
 
 
-                # # convert 13 channel body parse to 7 channel parse.
-                # parse_pred = gauss(up(parse_pred_down))
-                # parse_pred = parse_pred.argmax(dim=1, keepdim=True)
-                # parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
-                # parse_old.scatter_(1, parse_pred, 1.0)
+            # # convert 13 channel body parse to 7 channel parse.
+            # parse_pred = gauss(up(parse_pred_down))
+            # parse_pred = parse_pred.argmax(dim=1, keepdim=True)
+            # parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
+            # parse_old.scatter_(1, parse_pred, 1.0)
 
-                # VERIFY MEMORY FORMAT AND CHANNEL LAST HERE
+            # VERIFY MEMORY FORMAT AND CHANNEL LAST HERE
 
-                # parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
-                # for j in range(len(parse_labels)):
-                #     for lbl in parse_labels[j][1]:
-                #         parse[:, j] += parse_old[:, lbl]
+            # parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float32, device='cuda')
+            # for j in range(len(parse_labels)):
+            #     for lbl in parse_labels[j][1]:
+            #         parse[:, j] += parse_old[:, lbl]
 
-                # # Part 2. Clothes Deformation
-                # agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
-                # parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
-                # pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
-                # c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
-                # gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
+            # # Part 2. Clothes Deformation
+            # agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
+            # parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
+            # pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
+            # c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
+            # gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
 
-                # _, warped_grid = gmm(gmm_input, c_gmm)
-                # warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
-                # warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
+            # _, warped_grid = gmm(gmm_input, c_gmm)
+            # warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
+            # warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
 
-                # # Part 3. Try-on synthesis
-                # misalign_mask = parse[:, 2:3] - warped_cm
-                # misalign_mask[misalign_mask < 0.0] = 0.0
-                # parse_div = torch.cat((parse, misalign_mask), dim=1)
-                # parse_div[:, 2:3] -= misalign_mask
+            # # Part 3. Try-on synthesis
+            # misalign_mask = parse[:, 2:3] - warped_cm
+            # misalign_mask[misalign_mask < 0.0] = 0.0
+            # parse_div = torch.cat((parse, misalign_mask), dim=1)
+            # parse_div[:, 2:3] -= misalign_mask
 
-                # output = alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
+            # output = alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
 
 def main():
     opt = get_opt()
     print(opt)
 
     segG = SegGenerator(opt, input_nc=opt.semantic_nc + 8, output_nc=opt.semantic_nc)
-    segD = MultiscaleDiscriminator(opt, opt.semantic_nc + opt.semantic_nc + 8)
+    segD = MultiscaleDiscriminator(opt, opt.semantic_nc + opt.semantic_nc + 8, use_sigmoid=opt.no_lsgan)
     gmm = GMM(opt, inputA_nc=7, inputB_nc=3)
     opt.semantic_nc = 7
     alias = ALIASGenerator(opt, input_nc=9)
