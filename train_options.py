@@ -6,7 +6,7 @@ def get_opt():
 
     parser.add_argument('-b', '--batch_size', type=int, default=4)
     parser.add_argument('-j', '--workers', type=int, default=1)
-    parser.add_argument('-f', '--ff', type=str, default='1')
+    parser.add_argument('-f', '--ff', type=str, default='delete this arg later.')
     parser.add_argument('--load_height', type=int, default=1024)
     parser.add_argument('--load_width', type=int, default=768)
     parser.add_argument('--shuffle', action='store_true')
