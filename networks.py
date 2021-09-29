@@ -68,19 +68,19 @@ class MultiscaleDiscriminator(BaseNetwork):
         self.print_network()
         self.init_weights(opt.init_type, opt.init_variance)
 
-    def singleD_forward(self, model, input):
+    def singleD_forward(self, model, inp):
         if self.getIntermFeat:
-            result = [input]
+            result = [inp]
             for i in range(len(model)):
                 result.append(model[i](result[-1]))
             return result[1:]
         else:
-            return [model(input)]
+            return [model(inp)]
 
-    def forward(self, input):
+    def forward(self, inp):
         num_D = self.num_D
         result = []
-        input_downsampled = input
+        input_downsampled = inp
         for i in range(num_D):
             if self.getIntermFeat:
                 model = [getattr(self, 'scale' + str(num_D - 1 - i) + '_layer' + str(j)) for j in
@@ -138,15 +138,36 @@ class NLayerDiscriminator(BaseNetwork):
         self.print_network()
         self.init_weights(opt.init_type, opt.init_variance)
 
-    def forward(self, input):
+    def forward(self, inp):
         if self.getIntermFeat:
-            res = [input]
+            res = [inp]
             for n in range(self.n_layers + 2):
                 model = getattr(self, 'model' + str(n))
                 res.append(model(res[-1]))
             return res[1:]
         else:
-            return self.model(input)
+            return self.model(inp)
+
+
+class GANLoss(nn.Module):
+    def __init__(self, use_lsgan=True):
+        super(GANLoss, self).__init__()
+        if use_lsgan:
+            self.loss = nn.MSELoss()
+        else:
+            self.loss = nn.BCELoss()
+
+    def __call__(self, inp, target_is_real):
+        if isinstance(inp[0], list):
+            loss = 0
+            for input_i in inp:
+                pred = input_i[-1]
+                target_tensor = torch.empty_like(pred).fill_(target_is_real)
+                loss += self.loss(pred, target_tensor)
+            return loss
+        else:
+            target_tensor = torch.empty_like(inp[-1]).fill_(target_is_real)
+            return self.loss(inp[-1], target_tensor)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -329,7 +350,7 @@ class TpsGridGen(nn.Module):
         # where points[:,:,:,0] are the X coords
         # and points[:,:,:,1] are the Y coords
 
-        # input are the corresponding control points P_i
+        # inp are the corresponding control points P_i
         batch_size = theta.size()[0]
         # split theta into point coordinates
         Q_X=theta[:,:self.N,:,:].squeeze(3)

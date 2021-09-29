@@ -10,14 +10,14 @@ from torch import autograd
 import torchgeometry as tgm
 
 from train_datasets import VITONDataset, VITONDataLoader
-from networks import SegGenerator, GMM, ALIASGenerator, MultiscaleDiscriminator
+from networks import SegGenerator, GMM, ALIASGenerator, MultiscaleDiscriminator, GANLoss
 from utils import gen_noise, set_grads, load_checkpoint
 from train_options import get_opt
 
 
 def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
     up = nn.Upsample(size=(opt.load_height, opt.load_width), mode='bilinear')
-    gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).cuda(non_blocking=True)
+    gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).cuda()
 
     parse_labels = {
         0:  ['background',  [0]],
@@ -33,6 +33,7 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
     train_loader = VITONDataLoader(opt, train_dataset)
 
     criterion_gan = nn.MSELoss() if opt.use_lsgan else nn.CrossEntropyLoss()
+    criterion_gan = GANLoss(use_lsgan=opt.use_lsgan)
     ce_loss = nn.CrossEntropyLoss()
 
     optimizer_seg = torch.optim.Adam(list(segG.parameters()) + list(segD.parameters()),
@@ -59,13 +60,13 @@ def train(opt, segG=None, segD=None, gmm=None, alias=None, scaler=None):
                 parse_pred_down = segG(seg_input)
 
                 lambda_ce = 10
-                seg_loss = lambda_ce * ce_loss(parse_pred_down, parse_target_down.argmax(dim=1, keepdim=True))
+                seg_loss = lambda_ce * ce_loss(parse_pred_down, parse_target_down.argmax(dim=1))
                 
                 fake_out = segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
                 real_out = segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
-                seg_loss += criterion_gan(fake_out, torch.ones_like(fake_out))                          # Treat fake images as real to train the Generator.
-                seg_lossD = (criterion_gan(real_out, torch.empty_like(real_out).uniform_(0.9, 1.0))     # Treat real as real
-                           + criterion_gan(fake_out, torch.empty_like(fake_out).uniform_(0.0, 0.1)))   # and fake as fake to train Discriminator.
+                seg_loss += criterion_gan(fake_out, True)                          # Treat fake images as real to train the Generator.
+                seg_lossD = (criterion_gan(real_out, True)     # Treat real as real
+                           + criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.
 
                 scaled_gradsG = autograd.grad(scaler.scale(seg_loss), segG.parameters(), retain_graph=True)
                 scaled_gradsD = autograd.grad(scaler.scale(seg_lossD), segD.parameters())
@@ -115,7 +116,7 @@ def main():
     print(opt)
 
     segG = SegGenerator(opt, input_nc=opt.semantic_nc + 8, output_nc=opt.semantic_nc)
-    segD = MultiscaleDiscriminator(opt, opt.semantic_nc)
+    segD = MultiscaleDiscriminator(opt, opt.semantic_nc + opt.semantic_nc + 8)
     gmm = GMM(opt, inputA_nc=7, inputB_nc=3)
     opt.semantic_nc = 7
     alias = ALIASGenerator(opt, input_nc=9)
