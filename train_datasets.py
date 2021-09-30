@@ -13,13 +13,13 @@ from torchvision.transforms import InterpolationMode
 # TODO: Flip augmentation for training.
 
 class VITONDataset(data.Dataset):
-    def __init__(self, opt):
+    def __init__(self, args):
         super().__init__()
-        self.load_height = opt.load_height
-        self.load_width = opt.load_width
-        self.semantic_nc = opt.semantic_nc
-        self.memory_format = torch.channels_last if opt.memory_format == "channels_last" else torch.contiguous_format
-        self.data_path = osp.join(opt.dataset_dir, opt.dataset_mode)
+        self.load_height = args.load_height
+        self.load_width = args.load_width
+        self.semantic_nc = args.semantic_nc
+        self.memory_format = torch.channels_last if args.memory_format == "channels_last" else torch.contiguous_format
+        self.data_path = osp.join(args.dataset_dir, args.dataset_mode)
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
@@ -199,23 +199,22 @@ class VITONDataset(data.Dataset):
         result = {}
         for key in data_batch[0].keys():
             result[key] = torch.stack([inpd[key] for inpd in data_batch]).to(memory_format=self.memory_format)
-            
         return result
 
 
 class VITONDataLoader:
-    def __init__(self, opt, dataset):
+    def __init__(self, args, dataset):
         super().__init__()
 
         self.train_sampler = None
-        if opt.distributed:
-            self.train_sampler = data.distributed.DistributedSampler(dataset, shuffle=opt.shuffle)
-        elif opt.shuffle:
+        if args.num_gpus > 1:
+            self.train_sampler = data.distributed.DistributedSampler(dataset, shuffle=args.shuffle)
+        elif args.shuffle:
             self.train_sampler = data.sampler.RandomSampler(dataset)
 
         self.data_loader = data.DataLoader(
-                dataset, batch_size=opt.batch_size, shuffle=(self.train_sampler is None),
-                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=self.train_sampler,
+                dataset, batch_size=args.batch_size, shuffle=(self.train_sampler is None),
+                num_workers=args.workers, pin_memory=True, drop_last=True, sampler=self.train_sampler,
                 collate_fn=dataset.collate_fn
         )
         self.dataset = dataset

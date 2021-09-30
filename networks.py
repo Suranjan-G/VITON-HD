@@ -49,7 +49,7 @@ class BaseNetwork(nn.Module):
         pass
 
 class MultiscaleDiscriminator(BaseNetwork):
-    def __init__(self, opt, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d,
+    def __init__(self, args, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d,
                  use_sigmoid=False, num_D=2, getIntermFeat=False):
         super().__init__()
         self.num_D = num_D
@@ -57,7 +57,7 @@ class MultiscaleDiscriminator(BaseNetwork):
         self.getIntermFeat = getIntermFeat
 
         for i in range(num_D):
-            netD = NLayerDiscriminator(opt, input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
+            netD = NLayerDiscriminator(args, input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
             if getIntermFeat:
                 for j in range(n_layers + 2):
                     setattr(self, 'scale' + str(i) + '_layer' + str(j), getattr(netD, 'model' + str(j)))
@@ -65,8 +65,7 @@ class MultiscaleDiscriminator(BaseNetwork):
                 setattr(self, 'layer' + str(i), netD.model)
 
         self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
-        self.print_network()
-        self.init_weights(opt.init_type, opt.init_variance)
+        self.init_weights(args.init_type, args.init_variance)
 
     def singleD_forward(self, model, inp):
         if self.getIntermFeat:
@@ -95,7 +94,7 @@ class MultiscaleDiscriminator(BaseNetwork):
 
 # Define the PatchGAN discriminator with the specified arguments.
 class NLayerDiscriminator(BaseNetwork):
-    def __init__(self, opt, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, getIntermFeat=False):
+    def __init__(self, args, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, getIntermFeat=False):
         super().__init__()
         self.getIntermFeat = getIntermFeat
         self.n_layers = n_layers
@@ -135,8 +134,7 @@ class NLayerDiscriminator(BaseNetwork):
                 sequence_stream += sequence[n]
             self.model = nn.Sequential(*sequence_stream)
         
-        self.print_network()
-        self.init_weights(opt.init_type, opt.init_variance)
+        self.init_weights(args.init_type, args.init_variance)
 
     def forward(self, inp):
         if self.getIntermFeat:
@@ -174,7 +172,7 @@ class GANLoss(nn.Module):
 #                                              SegGenerator-related classes
 # ----------------------------------------------------------------------------------------------------------------------
 class SegGenerator(BaseNetwork):
-    def __init__(self, opt, input_nc, output_nc=13, norm_layer=nn.InstanceNorm2d):
+    def __init__(self, args, input_nc, output_nc=13, norm_layer=nn.InstanceNorm2d):
         super().__init__()
 
         self.conv1 = nn.Sequential(nn.Conv2d(input_nc, 64, kernel_size=3, padding=1), norm_layer(64), nn.ReLU(),
@@ -217,8 +215,7 @@ class SegGenerator(BaseNetwork):
         self.drop = nn.Dropout(0.5)
         self.sigmoid = nn.Sigmoid()
 
-        self.print_network()
-        self.init_weights(opt.init_type, opt.init_variance)
+        self.init_weights(args.init_type, args.init_variance)
 
     def forward(self, x):
         conv1 = self.conv1(x)
@@ -294,18 +291,18 @@ class FeatureRegression(nn.Module):
 
 
 class TpsGridGen(nn.Module):
-    def __init__(self, opt, dtype=torch.float):
+    def __init__(self, args, dtype=torch.float):
         super().__init__()
 
         # Create a grid in numpy.
         # TODO: set an appropriate interval ([-1, 1] in CP-VTON, [-0.9, 0.9] in the current version of VITON-HD)
-        grid_X, grid_Y = np.meshgrid(np.linspace(-0.9, 0.9, opt.load_width), np.linspace(-0.9, 0.9, opt.load_height))
+        grid_X, grid_Y = np.meshgrid(np.linspace(-0.9, 0.9, args.load_width), np.linspace(-0.9, 0.9, args.load_height))
         grid_X = torch.tensor(grid_X, dtype=dtype).unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
         grid_Y = torch.tensor(grid_Y, dtype=dtype).unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
 
         # Initialize the regular grid for control points P.
-        self.N = opt.grid_size * opt.grid_size
-        coords = np.linspace(-0.9, 0.9, opt.grid_size)
+        self.N = args.grid_size * args.grid_size
+        coords = np.linspace(-0.9, 0.9, args.grid_size)
         # FIXME: why P_Y and P_X are swapped?
         P_Y, P_X = np.meshgrid(coords, coords)
         P_X = torch.tensor(P_X, dtype=dtype).reshape(self.N, 1)
@@ -425,15 +422,15 @@ class TpsGridGen(nn.Module):
 
 
 class GMM(nn.Module):
-    def __init__(self, opt, inputA_nc, inputB_nc):
+    def __init__(self, args, inputA_nc, inputB_nc):
         super().__init__()
 
         self.extractionA = FeatureExtraction(inputA_nc, ngf=64, num_layers=4)
         self.extractionB = FeatureExtraction(inputB_nc, ngf=64, num_layers=4)
         self.correlation = FeatureCorrelation()
-        self.regression = FeatureRegression(input_nc=(opt.load_width // 64) * (opt.load_height // 64),
-                                            output_size=2 * opt.grid_size**2)
-        self.gridGen = TpsGridGen(opt)
+        self.regression = FeatureRegression(input_nc=(args.load_width // 64) * (args.load_height // 64),
+                                            output_size=2 * args.grid_size**2)
+        self.gridGen = TpsGridGen(args)
 
     def forward(self, inputA, inputB):
         featureA = F.normalize(self.extractionA(inputA), dim=1)
@@ -518,7 +515,7 @@ class ALIASNorm(nn.Module):
 
 
 class ALIASResBlock(nn.Module):
-    def __init__(self, opt, input_nc, output_nc, use_mask_norm=True):
+    def __init__(self, args, input_nc, output_nc, use_mask_norm=True):
         super().__init__()
 
         self.learned_shortcut = (input_nc != output_nc)
@@ -529,7 +526,7 @@ class ALIASResBlock(nn.Module):
         if self.learned_shortcut:
             self.conv_s = nn.Conv2d(input_nc, output_nc, kernel_size=1, bias=False)
 
-        subnorm_type = opt.norm_G
+        subnorm_type = args.norm_G
         if subnorm_type.startswith('spectral'):
             subnorm_type = subnorm_type[len('spectral'):]
             self.conv_0 = spectral_norm(self.conv_0)
@@ -537,7 +534,7 @@ class ALIASResBlock(nn.Module):
             if self.learned_shortcut:
                 self.conv_s = spectral_norm(self.conv_s)
 
-        semantic_nc = opt.semantic_nc
+        semantic_nc = args.semantic_nc
         if use_mask_norm:
             subnorm_type = 'aliasmask'
             semantic_nc = semantic_nc + 1
@@ -569,28 +566,28 @@ class ALIASResBlock(nn.Module):
 
 
 class ALIASGenerator(BaseNetwork):
-    def __init__(self, opt, input_nc):
+    def __init__(self, args, input_nc):
         super().__init__()
-        self.num_upsampling_layers = opt.num_upsampling_layers
+        self.num_upsampling_layers = args.num_upsampling_layers
 
-        self.sh, self.sw = self.compute_latent_vector_size(opt)
+        self.sh, self.sw = self.compute_latent_vector_size(args)
 
-        nf = opt.ngf
+        nf = args.ngf
         self.conv_0 = nn.Conv2d(input_nc, nf * 16, kernel_size=3, padding=1)
         for i in range(1, 8):
             self.add_module('conv_{}'.format(i), nn.Conv2d(input_nc, 16, kernel_size=3, padding=1))
 
-        self.head_0 = ALIASResBlock(opt, nf * 16, nf * 16)
+        self.head_0 = ALIASResBlock(args, nf * 16, nf * 16)
 
-        self.G_middle_0 = ALIASResBlock(opt, nf * 16 + 16, nf * 16)
-        self.G_middle_1 = ALIASResBlock(opt, nf * 16 + 16, nf * 16)
+        self.G_middle_0 = ALIASResBlock(args, nf * 16 + 16, nf * 16)
+        self.G_middle_1 = ALIASResBlock(args, nf * 16 + 16, nf * 16)
 
-        self.up_0 = ALIASResBlock(opt, nf * 16 + 16, nf * 8)
-        self.up_1 = ALIASResBlock(opt, nf * 8 + 16, nf * 4)
-        self.up_2 = ALIASResBlock(opt, nf * 4 + 16, nf * 2, use_mask_norm=False)
-        self.up_3 = ALIASResBlock(opt, nf * 2 + 16, nf * 1, use_mask_norm=False)
+        self.up_0 = ALIASResBlock(args, nf * 16 + 16, nf * 8)
+        self.up_1 = ALIASResBlock(args, nf * 8 + 16, nf * 4)
+        self.up_2 = ALIASResBlock(args, nf * 4 + 16, nf * 2, use_mask_norm=False)
+        self.up_3 = ALIASResBlock(args, nf * 2 + 16, nf * 1, use_mask_norm=False)
         if self.num_upsampling_layers == 'most':
-            self.up_4 = ALIASResBlock(opt, nf * 1 + 16, nf // 2, use_mask_norm=False)
+            self.up_4 = ALIASResBlock(args, nf * 1 + 16, nf // 2, use_mask_norm=False)
             nf = nf // 2
 
         self.conv_img = nn.Conv2d(nf, 3, kernel_size=3, padding=1)
@@ -599,10 +596,9 @@ class ALIASGenerator(BaseNetwork):
         self.relu = nn.LeakyReLU(0.2)
         self.tanh = nn.Tanh()
 
-        self.print_network()
-        self.init_weights(opt.init_type, opt.init_variance)
+        self.init_weights(args.init_type, args.init_variance)
 
-    def compute_latent_vector_size(self, opt):
+    def compute_latent_vector_size(self, args):
         if self.num_upsampling_layers == 'normal':
             num_up_layers = 5
         elif self.num_upsampling_layers == 'more':
@@ -610,10 +606,10 @@ class ALIASGenerator(BaseNetwork):
         elif self.num_upsampling_layers == 'most':
             num_up_layers = 7
         else:
-            raise ValueError(f"opt.num_upsampling_layers '{self.num_upsampling_layers}' is not recognized")
+            raise ValueError(f"args.num_upsampling_layers '{self.num_upsampling_layers}' is not recognized")
 
-        sh = opt.load_height // 2**num_up_layers
-        sw = opt.load_width // 2**num_up_layers
+        sh = args.load_height // 2**num_up_layers
+        sw = args.load_width // 2**num_up_layers
         return sh, sw
 
     def forward(self, x, seg, seg_div, misalign_mask):

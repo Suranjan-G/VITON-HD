@@ -1,7 +1,7 @@
 import argparse
 import wandb
 
-def get_opt():
+def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-b', '--batch_size', type=int, default=4)
@@ -9,7 +9,9 @@ def get_opt():
     parser.add_argument('-f', '--ff', type=str, default='delete this arg later.')
     parser.add_argument('--load_height', type=int, default=1024)
     parser.add_argument('--load_width', type=int, default=768)
-    parser.add_argument('--shuffle', action='store_true')
+    parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
+    parser.add_argument('--num_gpus', type=int, default=1, help="Use Distributed training with multi GPUs.")
+    parser.add_argument('--sync_bn', action='store_true', help="Synchronize BatchNorm across all devices.")
 
     parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
     parser.add_argument('--use_amp', action='store_true', help="Use mixed precision training.")
@@ -40,10 +42,10 @@ def get_opt():
                         help='If \'more\', add upsampling layer between the two middle resnet blocks. '
                              'If \'most\', also add one more (upsampling + resnet) layer at the end of the generator.')
 
-    opt = parser.parse_args()
-    if opt.use_wandb:
+    args = parser.parse_args()
+    if args.use_wandb:
         wandb.init(project="VITON-HD")
-        wandb.config.update(opt)
+        wandb.config.update(args)
         return wandb.config
     else:
-        return opt
+        return args
