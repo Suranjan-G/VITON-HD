@@ -1,17 +1,49 @@
 import os
-
 import cv2
+import random
 import numpy as np
 from PIL import Image
+
 import torch
+import torch.distributed as dist
+
+def seed_everything(seed=3407):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = True
+    # torch.backends.cudnn.deterministic = True
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+def synchronize():
+    if not dist.is_available():
+        return
+
+    if not dist.is_initialized():
+        return
+
+    if dist.get_world_size() == 1:
+        return
+
+    dist.barrier()
+
+def cleanup(distributed):
+    if distributed:
+        dist.destroy_process_group()
+
+def get_world_size():
+    if not dist.is_available():
+        return 1
+
+    if not dist.is_initialized():
+        return 1
+
+    return dist.get_world_size()
 
 
 def gen_noise(shape, device='cuda'):
     return torch.randn(shape, dtype=torch.float32, device=device)
-
-def set_grads(grads, params):
-    for g,p in zip(grads, params):
-        p.grad = g
 
 def save_images(img_tensors, img_names, save_dir):
     for img_tensor, img_name in zip(img_tensors, img_names):

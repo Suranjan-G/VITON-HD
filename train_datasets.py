@@ -199,6 +199,7 @@ class VITONDataset(data.Dataset):
         result = {}
         for key in data_batch[0].keys():
             result[key] = torch.stack([inpd[key] for inpd in data_batch]).to(memory_format=self.memory_format)
+            
         return result
 
 
@@ -206,24 +207,15 @@ class VITONDataLoader:
     def __init__(self, opt, dataset):
         super().__init__()
 
-        if opt.shuffle:
-            train_sampler = data.sampler.RandomSampler(dataset)
-        else:
-            train_sampler = None
+        self.train_sampler = None
+        if opt.distributed:
+            self.train_sampler = data.distributed.DistributedSampler(dataset, shuffle=opt.shuffle)
+        elif opt.shuffle:
+            self.train_sampler = data.sampler.RandomSampler(dataset)
 
         self.data_loader = data.DataLoader(
-                dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
-                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=train_sampler,
+                dataset, batch_size=opt.batch_size, shuffle=(self.train_sampler is None),
+                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=self.train_sampler,
                 collate_fn=dataset.collate_fn
         )
         self.dataset = dataset
-        self.data_iter = self.data_loader.__iter__()
-
-    def next_batch(self):
-        try:
-            batch = self.data_iter.__next__()
-        except StopIteration:
-            self.data_iter = self.data_loader.__iter__()
-            batch = self.data_iter.__next__()
-
-        return batch
