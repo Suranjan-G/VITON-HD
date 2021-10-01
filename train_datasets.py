@@ -1,16 +1,17 @@
 import json
+import os
 from os import path as osp
-from glob import glob
-
+import random
 import numpy as np
 from PIL import Image, ImageDraw
+
 import torch
+from torch import nn
 from torch.utils import data
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
+import torchvision.transforms.functional as TF
 
-
-# TODO: Flip augmentation for training.
 
 class VITONDataset(data.Dataset):
     def __init__(self, args):
@@ -26,8 +27,7 @@ class VITONDataset(data.Dataset):
         ])
 
         # load data list
-        self.img_names = [osp.basename(i) for i in glob("datasets/*/image/*")]
-        self.c_names = [osp.basename(i) for i in glob("datasets/*/cloth/*")]
+        self.img_names = os.listdir(osp.join(self.data_path, 'image'))
 
     def get_parse_agnostic(self, parse, pose_data):
         parse_array = np.asarray(parse)
@@ -113,16 +113,15 @@ class VITONDataset(data.Dataset):
 
     def __getitem__(self, index):
         img_name = self.img_names[index]
-        c_name = self.c_names[index]
-        c = Image.open(osp.join(self.data_path, 'cloth', c_name)).convert('RGB')
+        c = Image.open(osp.join(self.data_path, 'cloth', img_name)).convert('RGB')
         c = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(c)
-        cm = Image.open(osp.join(self.data_path, 'cloth-mask', c_name))
-        cm = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)(cm)
-
         c = self.transform(c)  # [-1,1]
-        cm_array = np.asarray(cm)
-        cm_array = (cm_array >= 128).astype(np.float32)
-        cm = torch.from_numpy(cm_array)  # [0,1]
+
+        cm = Image.open(osp.join(self.data_path, 'cloth-mask', img_name))
+        cm = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)(cm)
+        cm = np.asarray(cm)
+        cm = (cm >= 128).astype(np.float32)
+        cm = torch.from_numpy(cm)  # [0,1]
         cm.unsqueeze_(0)
 
         # load pose image
@@ -191,14 +190,20 @@ class VITONDataset(data.Dataset):
             'cloth_mask': cm,
         }
         return result
-
+    
     def __len__(self):
         return len(self.img_names)
-
-    def collate_fn(self, data_batch):
+    
+    def collate_fn(self, data_batch, angle_keys=['cloth', 'cloth_mask']):
+        angle1, angle2 = torch.randint(-15, 15, (2,))
+        flip = torch.randn([]) > 0.5
         result = {}
         for key in data_batch[0].keys():
-            result[key] = torch.stack([inpd[key] for inpd in data_batch]).to(memory_format=self.memory_format)
+            result[key] = torch.stack([inpd[key] for inpd in data_batch])
+            if flip: result[key] = TF.hflip(result[key])
+            angle = angle1 if key in angle_keys else angle2
+            result[key] = TF.rotate(result[key], angle)
+            result[key] = result[key].to(memory_format=self.memory_format)
         return result
 
 

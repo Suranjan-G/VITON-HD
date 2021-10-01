@@ -1,4 +1,3 @@
-import os
 import wandb
 from tqdm import tqdm
 import torchgeometry as tgm
@@ -9,25 +8,18 @@ from torch.nn import functional as F
 from torch.cuda import amp
 import torch.optim as optim
 
-import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from train_datasets import VITONDataset, VITONDataLoader
 from networks import SegGenerator, GMM, ALIASGenerator, MultiscaleDiscriminator, GANLoss
-from utils import cleanup, gen_noise, seed_everything, load_checkpoint, synchronize
+from utils import cleanup, gen_noise, seed_everything, load_checkpoint, synchronize, AverageMeter
 from train_options import get_args
 
 
 class TrainModel:
     def __init__(self, args):
-        if args.num_gpus > 1:
-            local_rank = int(os.environ.get("LOCAL_RANK"))
-            # Unique only on individual node.
-            self.device = torch.device(f"cuda:{local_rank}")
-        else:
-            self.device = torch.device("cuda:0")
-            local_rank = 0
+        self.device = torch.device('cuda', args.local_rank)
         self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).to(self.device).train()
         self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).to(self.device).train()
         # self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).to(self.device).train()
@@ -42,9 +34,8 @@ class TrainModel:
         # self.gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(self.device)
         # self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
-        train_dataset = VITONDataset(args)
-        train_loader = VITONDataLoader(args, train_dataset)
-        train_loader.train_sampler.set_epoch(epoch)
+        self.train_dataset = VITONDataset(args)
+        self.train_loader = VITONDataLoader(args, self.train_dataset)
 
         self.criterion_gan = GANLoss(use_lsgan=not args.no_lsgan)
         self.ce_loss = nn.CrossEntropyLoss()
@@ -70,20 +61,39 @@ class TrainModel:
                 self.segD = nn.SyncBatchNorm.convert_sync_batchnorm(self.segD)
                 # self.gmm = nn.SyncBatchNorm.convert_sync_batchnorm(self.gmm)
                 # self.alias = nn.SyncBatchNorm.convert_sync_batchnorm(self.alias)
-            self.segG = DDP(self.segG, device_ids=[local_rank], output_device=local_rank, broadcast_buffers=False)
-            self.segD = DDP(self.segD, device_ids=[local_rank], output_device=local_rank, broadcast_buffers=False)
-            # self.gmm = DDP(self.gmm, device_ids=[local_rank], output_device=local_rank, broadcast_buffers=False)
-            # self.alias = DDP(self.alias, device_ids=[local_rank], output_device=local_rank, broadcast_buffers=False)
-
-        self.local_rank = local_rank
+            self.segG = DDP(self.segG, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            self.segD = DDP(self.segD, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            # self.gmm = DDP(self.gmm, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            # self.alias = DDP(self.alias, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+        if args.local_rank==0 and args.use_wandb:
+            wandb.watch([self.segG, self.segD], log=None)
     
-    def segmentation_train_step(self, args, inputs):
-        parse_target_down = inputs['parse_target_down'].to(self.device, non_blocking=True)
-        parse_agnostic = inputs['parse_agnostic'].to(self.device, non_blocking=True)
-        pose = inputs['pose'].to(self.device, non_blocking=True)
-        c = inputs['cloth'].to(self.device, non_blocking=True)
-        cm = inputs['cloth_mask'].to(self.device, non_blocking=True)
+    def train_epoch(self, args, epoch):
+        if args.num_gpus > 1: self.train_loader.train_sampler.set_epoch(epoch)
+        segG_losses = AverageMeter()
+        segD_losses = AverageMeter()
+        with tqdm(enumerate(self.train_loader.data_loader), desc=f"Epoch {epoch:>2}") as pbar:
+            for step, batch in pbar:
+                # img = batch['img'].to(self.device, non_blocking=True)
+                # img_agnostic = batch['img_agnostic'].to(self.device, non_blocking=True)
+                parse_target_down = batch['parse_target_down'].to(self.device, non_blocking=True)
+                parse_agnostic = batch['parse_agnostic'].to(self.device, non_blocking=True)
+                pose = batch['pose'].to(self.device, non_blocking=True)
+                c = batch['cloth'].to(self.device, non_blocking=True)
+                cm = batch['cloth_mask'].to(self.device, non_blocking=True)
 
+                seg_lossG, seg_lossD = self.segmentation_train_step(args, parse_target_down, parse_agnostic, pose, c, cm)
+
+                segG_losses.update(seg_lossG.detach_(), len(batch))
+                segD_losses.update(seg_lossD.detach_(), len(batch))
+                if args.local_rank == 0:
+                    if not step % args.log_interval:
+                        info = {'SegG Loss': float(segG_losses.avg), 'SegD Loss': float(segD_losses.avg)}
+                        if args.use_wandb: wandb.log(info)
+                        pbar.set_postfix(info)
+                self.scaler.update()
+    
+    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, c, cm):
         with amp.autocast(enabled=args.use_amp):
             # Part 1. Segmentation generation
             parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
@@ -112,68 +122,52 @@ class TrainModel:
 
         self.scaler.step(self.optimizer_seg)
         self.optimizer_seg.zero_grad(set_to_none=True)
-        self.scaler.update()
-        if self.local_rank == 0:
-            print(seg_lossG, seg_lossD)
+        return seg_lossG.detach_(), seg_lossG.detach_()
 
 
-    def gmm_train_step(self, args, inputs):
-        img = inputs['img'].to(self.device, non_blocking=True)
-        img_agnostic = inputs['img_agnostic'].to(self.device, non_blocking=True)
-
+    def gmm_train_step(self, args, img, img_agnostic, parse_target_down, pose, c, cm):
         # convert 13 channel body parse to 7 channel parse.
-        # parse_pred = gauss(up(parse_pred_down))
-        # parse_pred = parse_pred.argmax(dim=1, keepdim=True)
-        # parse_old = torch.zeros(parse_pred.size(0), 13, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
-        # parse_old.scatter_(1, parse_pred, 1.0)
+        parse_target = self.gauss(self.up(parse_target_down))
+        parse_target = parse_target.argmax(dim=1, keepdim=True)
+        parse_old = torch.zeros(parse_target.size(0), 13, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
+        parse_old.scatter_(1, parse_target, 1.0)
 
-        # VERIFY MEMORY FORMAT AND CHANNEL LAST HERE
+        parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
+        for j in range(len(self.parse_labels)):
+            for lbl in self.parse_labels[j][1]:
+                parse[:, j] += parse_old[:, lbl]
 
-        # parse = torch.zeros(parse_pred.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
-        # for j in range(len(self.parse_labels)):
-        #     for lbl in self.parse_labels[j][1]:
-        #         parse[:, j] += parse_old[:, lbl]
+        # Part 2. Clothes Deformation
+        agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
+        parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
+        pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
+        c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
+        gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
 
-        # # Part 2. Clothes Deformation
-        # agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
-        # parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
-        # pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
-        # c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
-        # gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
-
-        # _, warped_grid = gmm(gmm_input, c_gmm)
-        # warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
-        # warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
+        _, warped_grid = self.gmm(gmm_input, c_gmm)
+        warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
+        warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
+        return
 
 
-    def alias_train_step(self, args, inputs):
-        img = inputs['img'].to(self.device, non_blocking=True)
-        img_agnostic = inputs['img_agnostic'].to(self.device, non_blocking=True)
+    def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm):
         # Part 3. Try-on synthesis
-        # misalign_mask = parse[:, 2:3] - warped_cm
-        # misalign_mask[misalign_mask < 0.0] = 0.0
-        # parse_div = torch.cat((parse, misalign_mask), dim=1)
-        # parse_div[:, 2:3] -= misalign_mask
+        misalign_mask = parse[:, 2:3] - warped_cm
+        misalign_mask[misalign_mask < 0.0] = 0.0
+        parse_div = torch.cat((parse, misalign_mask), dim=1)
+        parse_div[:, 2:3] -= misalign_mask
 
-        # output = alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
-
-
-def subprocess_fn(rank, args):
-    if args.num_gpus > 1:
-        dist.init_process_group(backend="nccl", init_method='env://', rank=rank, world_size=args.num_gpus)
+        output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
+        return
 
 
 def main():
     args = get_args()
     print(args)
+    seed_everything(args.seed)
     try:
-        seed_everything(args.seed)
-        mp.set_start_method('spawn')
-        if args.num_gpus > 1:
-            mp.spawn(fn=subprocess_fn, args=(args,), nprocs=args.num_gpus)
-
-        TrainModel(args)
-
+        tm = TrainModel(args)
+        tm.train()
     except KeyboardInterrupt:
         print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
     finally:
