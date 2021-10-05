@@ -74,7 +74,7 @@ class TrainModel:
         if args.distributed: self.train_loader.train_sampler.set_epoch(epoch)
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
-        with tqdm(enumerate(self.train_loader.data_loader), desc=f"Epoch {epoch:>2}") as pbar:
+        with tqdm(enumerate(self.train_loader.data_loader), total=len(self.train_loader.data_loader), desc=f"Epoch {epoch:>2}") as pbar:
             for step, batch in pbar:
                 # img = batch['img'].to(self.device, non_blocking=True)
                 # img_agnostic = batch['img_agnostic'].to(self.device, non_blocking=True)
@@ -124,7 +124,7 @@ class TrainModel:
 
         self.scaler.step(self.optimizer_seg)
         self.optimizer_seg.zero_grad(set_to_none=True)
-        return seg_lossG.detach_(), seg_lossG.detach_()
+        return seg_lossG.detach_(), seg_lossD.detach_()
 
 
     def gmm_train_step(self, args, img, img_agnostic, parse_target_down, pose, c, cm):
