@@ -35,9 +35,6 @@ class TrainModel:
         # self.gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(self.device)
         # self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
-        self.train_dataset = VITONDataset(args)
-        self.train_loader = VITONDataLoader(args, self.train_dataset)
-
         self.criterion_gan = GANLoss(use_lsgan=not args.no_lsgan)
         self.ce_loss = nn.CrossEntropyLoss()
 
@@ -67,6 +64,10 @@ class TrainModel:
             self.segD = DDP(self.segD, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
             # self.gmm = DDP(self.gmm, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
             # self.alias = DDP(self.alias, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+
+        self.train_dataset = VITONDataset(args)
+        self.train_loader = VITONDataLoader(args, self.train_dataset)
+
         if args.local_rank==0 and args.use_wandb:
             wandb.watch([self.segG, self.segD], log=None)
     
