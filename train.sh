@@ -14,4 +14,5 @@ python3 -m torch.distributed.run \
     --load_width 768
     --use_wandb \
     --log_interval 100 \
+    --workers 4
 

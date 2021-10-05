@@ -21,6 +21,7 @@ def get_args():
     parser.add_argument('--seed', type=int, default=3407, metavar="N", help="Random seed.")
     parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
 
+    parser.add_argument('--workers', type=int, default=4, metavar="N", help="Number of workers for dataloader.")
     parser.add_argument('--dataset_dir', type=str, default='./datasets/')
     parser.add_argument('--dataset_mode', type=str, default='train', help="train or test.")
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints/')

@@ -117,7 +117,7 @@ class VITONDataset(data.Dataset):
         c = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(c)
         c = self.transform(c)  # [-1,1]
 
-        cm = Image.open(osp.join(self.data_path, 'cloth-mask', img_name))
+        cm = Image.open(osp.join(self.data_path, 'cloth-mask', img_name)).convert('L')
         cm = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)(cm)
         cm = np.asarray(cm)
         cm = (cm >= 128).astype(np.float32)
@@ -202,7 +202,7 @@ class VITONDataset(data.Dataset):
             result[key] = torch.stack([inpd[key] for inpd in data_batch])
             if flip: result[key] = TF.hflip(result[key])
             angle = angle1 if key in angle_keys else angle2
-            result[key] = TF.rotate(result[key], angle)
+            result[key] = TF.rotate(result[key], float(angle))
             result[key] = result[key].to(memory_format=self.memory_format)
         return result
 
