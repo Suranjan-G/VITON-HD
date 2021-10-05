@@ -1,33 +1,29 @@
+import os
 import argparse
 import wandb
 
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-b', '--batch_size', type=int, default=4)
-    parser.add_argument('-j', '--workers', type=int, default=1)
+    parser.add_argument('-b', '--batch_size', type=int, default=128)
+    parser.add_argument('--epochs', type=int, default=100, metavar="N", help="Number of epochs.")
     parser.add_argument('-f', '--ff', type=str, default='delete this arg later.', help="Ignore this arg.")
-    parser.add_argument("--local_rank", type=int, default=0, metavar="N", help="Local process rank.")
     parser.add_argument('--load_height', type=int, default=1024, help="Height of input image.")
     parser.add_argument('--load_width', type=int, default=768, help="Width of input image.")
-    parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
-    parser.add_argument('--num_gpus', type=int, default=1, help="Use Distributed training with multi GPUs.")
-    parser.add_argument('--sync_bn', action='store_true', help="Synchronize BatchNorm across all devices.")
-
-    parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
-    parser.add_argument('--log_interval', type=int, default=100, metavar="N", help="Log per N steps.")
-    parser.add_argument('--seed', type=int, default=3407, metavar="N", help="Random seed.")
-    parser.add_argument('--project_name', type=str, default='VITON-HD', help="Name of wandb project.")
+    parser.add_argument('--distributed', action='store_true', help="Use Distributed training with multi GPUs.")
+    parser.add_argument('--sync_bn', action='store_true', help="Synchronize BatchNorm across all devices. Use when batchsize is small.")
     parser.add_argument('--use_amp', action='store_true', help="Use mixed precision training.")
     parser.add_argument('--memory_format', type=str, default='channels_last', help="Channels last or contiguous.")
+
+    parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
+    parser.add_argument('--project', type=str, default='VITON-HD', help="Name of wandb project.")
+    parser.add_argument('--log_interval', type=int, default=100, metavar="N", help="Log per N steps.")
+    parser.add_argument('--seed', type=int, default=3407, metavar="N", help="Random seed.")
+    parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
 
     parser.add_argument('--dataset_dir', type=str, default='./datasets/')
     parser.add_argument('--dataset_mode', type=str, default='train', help="train or test.")
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints/')
-
-    parser.add_argument('--seg_checkpoint', type=str, default='seg_final.pth')
-    parser.add_argument('--gmm_checkpoint', type=str, default='gmm_final.pth')
-    parser.add_argument('--alias_checkpoint', type=str, default='alias_final.pth')
 
     # common
     parser.add_argument('--semantic_nc', type=int, default=13, help='# of human-parsing map classes')
@@ -46,9 +42,13 @@ def get_args():
                              'If \'most\', also add one more (upsampling + resnet) layer at the end of the generator.')
 
     args = parser.parse_args()
+    try:
+        args.local_rank = int(os.environ["LOCAL_RANK"])
+    except KeyError:
+        args.local_rank = 0
     if args.use_wandb:
         if args.local_rank == 0:
-            run = wandb.init(project=args.project_name)
+            run = wandb.init(project=args.project)
             wandb.config.update(args)
             args = wandb.config
     return args

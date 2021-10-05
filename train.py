@@ -1,3 +1,4 @@
+import os
 import wandb
 from tqdm import tqdm
 import torchgeometry as tgm
@@ -55,7 +56,8 @@ class TrainModel:
                 5:  ['right_arm',   [6]],
                 6:  ['noise',       [12]]
             }
-        if args.num_gpus > 1:
+        if args.distributed:
+            dist.init_process_group(backend="nccl")
             if args.sync_bn:
                 self.segG = nn.SyncBatchNorm.convert_sync_batchnorm(self.segG)
                 self.segD = nn.SyncBatchNorm.convert_sync_batchnorm(self.segD)
@@ -69,7 +71,7 @@ class TrainModel:
             wandb.watch([self.segG, self.segD], log=None)
     
     def train_epoch(self, args, epoch):
-        if args.num_gpus > 1: self.train_loader.train_sampler.set_epoch(epoch)
+        if args.distributed: self.train_loader.train_sampler.set_epoch(epoch)
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
         with tqdm(enumerate(self.train_loader.data_loader), desc=f"Epoch {epoch:>2}") as pbar:
@@ -106,7 +108,7 @@ class TrainModel:
 
             lambda_ce = 10
             seg_lossG = lambda_ce * self.ce_loss(parse_pred_down, parse_target_down.argmax(dim=1))
-            
+
             fake_out = self.segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
             real_out = self.segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
             seg_lossG += self.criterion_gan(fake_out, True)                          # Treat fake images as real to train the Generator.
@@ -159,6 +161,21 @@ class TrainModel:
 
         output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
         return
+    
+    def save_models(self, args):
+        synchronize()
+        if args.local_rank == 0:
+            torch.save(self.segG.state_dict(), os.path.join(args.checkpoint_dir, "segG.pth"))
+            torch.save(self.segD.state_dict(), os.path.join(args.checkpoint_dir, "segD.pth"))
+            torch.save(self.optimizer_seg.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_seg.pth"))
+    
+    def load_models(self, args):
+        synchronize()
+        # configure map_location properly
+        map_location = {'cuda:0': f'cuda:{args.local_rank}'}
+        self.segG.load_state_dict(os.path.join(args.checkpoint_dir, "segG.pth"), map_location=map_location)
+        self.segD.load_state_dict(os.path.join(args.checkpoint_dir, "segD.pth"), map_location=map_location)
+        self.optimizer_seg.load_state_dict(os.path.join(args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location)
 
 
 def main():
@@ -166,12 +183,16 @@ def main():
     print(args)
     seed_everything(args.seed)
     try:
+        init_epoch = 0
         tm = TrainModel(args)
-        tm.train()
+        for epoch in range(init_epoch, args.epochs):
+            tm.train_epoch(args, epoch)
+            if args.local_rank == 0:
+                if args.use_wandb: wandb.log({'epoch': epoch})
     except KeyboardInterrupt:
         print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
     finally:
-        cleanup(args.num_gpus > 1)
+        cleanup(args.distributed)
 
 
 if __name__ == '__main__':

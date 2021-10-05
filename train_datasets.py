@@ -125,12 +125,12 @@ class VITONDataset(data.Dataset):
         cm.unsqueeze_(0)
 
         # load pose image
-        pose_name = img_name.replace('.jpg', '_rendered.png')
+        pose_name = img_name.replace('.png', '_rendered.png')
         pose_rgb = Image.open(osp.join(self.data_path, 'openpose-img', pose_name))
         pose_rgb = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(pose_rgb)
         pose_rgb = self.transform(pose_rgb)  # [-1,1]
 
-        pose_name = img_name.replace('.jpg', '_keypoints.json')
+        pose_name = img_name.replace('.png', '_keypoints.json')
         with open(osp.join(self.data_path, 'openpose-json', pose_name), 'r') as f:
             pose_label = json.load(f)
             pose_data = pose_label['people'][0]['pose_keypoints_2d']
@@ -138,7 +138,7 @@ class VITONDataset(data.Dataset):
             pose_data = pose_data.reshape((-1, 3))[:, :2]
 
         # load parsing image
-        parse_name = img_name.replace('.jpg', '.png')
+        parse_name = img_name
         parse = Image.open(osp.join(self.data_path, 'image-parse', parse_name))
         parse_down = transforms.Resize((256, 192), interpolation=InterpolationMode.NEAREST)(parse)
         parse_down = torch.from_numpy(np.array(parse_down)[None]).long()
@@ -212,7 +212,7 @@ class VITONDataLoader:
         super().__init__()
 
         self.train_sampler = None
-        if args.num_gpus > 1:
+        if args.distributed:
             self.train_sampler = data.distributed.DistributedSampler(dataset, shuffle=args.shuffle)
         elif args.shuffle:
             self.train_sampler = data.sampler.RandomSampler(dataset)
