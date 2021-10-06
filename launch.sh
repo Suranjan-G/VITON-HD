@@ -9,4 +9,4 @@ python3 train.py \
     --load_width 768 \
     --use_wandb \
     --log_interval 20 \
-    --workers 5
+    --workers 4

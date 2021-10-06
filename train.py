@@ -207,7 +207,6 @@ def main():
                     im_dict = {}
                     for k in seg_im_log:
                         for img in seg_im_log[k]:
-                            print(img.shape)
                             im_dict[k] = wandb.Image(img)
                     wandb.log(im_dict)
                 if not epoch%10:
