@@ -21,11 +21,12 @@ from train_options import get_args
 class TrainModel:
     def __init__(self, args):
         self.device = torch.device('cuda', args.local_rank)
-        self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).to(self.device).train()
-        self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).to(self.device).train()
-        # self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).to(self.device).train()
+        self.memory_format = torch.channels_last if args.memory_format == "channels_last" else torch.contiguous_format
+        self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).train().to(self.device, memory_format=self.memory_format)
+        self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format)
+        # self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 7
-        # alias = ALIASGenerator(args, input_nc=9).to(self.device).train()
+        # alias = ALIASGenerator(args, input_nc=9).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 13
 
         # load_checkpoint(self.segG, os.path.join(args.checkpoint_dir, args.seg_checkpoint))
@@ -77,15 +78,16 @@ class TrainModel:
         segD_losses = AverageMeter()
         with tqdm(enumerate(self.train_loader.data_loader), total=len(self.train_loader.data_loader), desc=f"Epoch {epoch:>2}") as pbar:
             for step, batch in pbar:
-                # img = batch['img'].to(self.device, non_blocking=True)
-                # img_agnostic = batch['img_agnostic'].to(self.device, non_blocking=True)
-                parse_target_down = batch['parse_target_down'].to(self.device, non_blocking=True)
-                parse_agnostic = batch['parse_agnostic'].to(self.device, non_blocking=True)
-                pose = batch['pose'].to(self.device, non_blocking=True)
-                c = batch['cloth'].to(self.device, non_blocking=True)
-                cm = batch['cloth_mask'].to(self.device, non_blocking=True)
+                batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
+                # img = batch['img']
+                # img_agnostic = batch['img_agnostic']
+                parse_target_down = batch['parse_target_down']
+                parse_agnostic = batch['parse_agnostic']
+                pose = batch['pose']
+                cloth = batch['cloth']
+                cloth_mask = batch['cloth_mask']
 
-                seg_lossG, seg_lossD = self.segmentation_train_step(args, parse_target_down, parse_agnostic, pose, c, cm)
+                seg_lossG, seg_lossD = self.segmentation_train_step(args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask)
 
                 segG_losses.update(seg_lossG.detach_(), len(batch))
                 segD_losses.update(seg_lossD.detach_(), len(batch))
@@ -96,13 +98,13 @@ class TrainModel:
                         pbar.set_postfix(info)
                 self.scaler.update()
     
-    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, c, cm):
+    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask):
         with amp.autocast(enabled=args.use_amp):
             # Part 1. Segmentation generation
             parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
             pose_down = F.interpolate(pose, size=(256, 192), mode='bilinear')
-            c_masked_down = F.interpolate(c * cm, size=(256, 192), mode='bilinear')
-            cm_down = F.interpolate(cm, size=(256, 192), mode='bilinear')
+            c_masked_down = F.interpolate(cloth * cloth_mask, size=(256, 192), mode='bilinear')
+            cm_down = F.interpolate(cloth_mask, size=(256, 192), mode='bilinear')
             seg_input = torch.cat((cm_down, c_masked_down, parse_agnostic_down, pose_down, gen_noise(cm_down.size(), device=self.device)), dim=1)
 
             parse_pred_down = self.segG(seg_input)
@@ -128,7 +130,7 @@ class TrainModel:
         return seg_lossG.detach_(), seg_lossD.detach_()
 
 
-    def gmm_train_step(self, args, img, img_agnostic, parse_target_down, pose, c, cm):
+    def gmm_train_step(self, args, img, img_agnostic, parse_target_down, pose, cloth, cloth_mask):
         # convert 13 channel body parse to 7 channel parse.
         parse_target = self.gauss(self.up(parse_target_down))
         parse_target = parse_target.argmax(dim=1, keepdim=True)
@@ -144,12 +146,12 @@ class TrainModel:
         agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
         parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
         pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
-        c_gmm = F.interpolate(c, size=(256, 192), mode='nearest')
+        c_gmm = F.interpolate(cloth, size=(256, 192), mode='nearest')
         gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
 
         _, warped_grid = self.gmm(gmm_input, c_gmm)
-        warped_c = F.grid_sample(c, warped_grid, padding_mode='border')
-        warped_cm = F.grid_sample(cm, warped_grid, padding_mode='border')
+        warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
+        warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
         return
 
 

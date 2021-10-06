@@ -5,7 +5,7 @@ import wandb
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-b', '--batch_size', type=int, default=128)
+    parser.add_argument('-b', '--batch_size', type=int, default=16)
     parser.add_argument('--epochs', type=int, default=100, metavar="N", help="Number of epochs.")
     parser.add_argument('-f', '--ff', type=str, default='delete this arg later.', help="Ignore this arg.")
     parser.add_argument('--load_height', type=int, default=1024, help="Height of input image.")
