@@ -192,7 +192,8 @@ def main():
             tm.train_epoch(args, epoch)
             if args.local_rank == 0:
                 if args.use_wandb: wandb.log({'epoch': epoch})
-                tm.save_models(args)
+                if not epoch%10:
+                    tm.save_models(args)
     except KeyboardInterrupt:
         print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
     finally:
