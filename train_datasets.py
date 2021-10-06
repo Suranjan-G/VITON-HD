@@ -201,7 +201,10 @@ class VITONDataset(data.Dataset):
         for key in data_batch[0].keys():
             result[key] = torch.stack([inpd[key] for inpd in data_batch])
             if flip: result[key] = TF.hflip(result[key])
-            angle = angle1 if key in angle_keys else angle2
+            if torch.randn([]) > 0.5:
+                angle = angle1 if key in angle_keys else angle2
+            else:
+                angle = 0
             result[key] = TF.rotate(result[key], float(angle))
             result[key] = result[key].to(memory_format=self.memory_format)
         return result
