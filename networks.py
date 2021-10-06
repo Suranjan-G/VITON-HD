@@ -49,7 +49,7 @@ class BaseNetwork(nn.Module):
         pass
 
 class MultiscaleDiscriminator(BaseNetwork):
-    def __init__(self, args, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d,
+    def __init__(self, args, input_nc, ndf=64, n_layers=5, norm_layer=nn.InstanceNorm2d,
                  use_sigmoid=False, num_D=2, getIntermFeat=False):
         super().__init__()
         self.num_D = num_D
@@ -213,7 +213,7 @@ class SegGenerator(BaseNetwork):
 
         self.pool = nn.MaxPool2d(2)
         self.drop = nn.Dropout(0.5)
-        self.sigmoid = nn.Sigmoid()
+        # self.sigmoid = nn.Sigmoid()
 
         self.init_weights(args.init_type, args.init_variance)
 
@@ -228,7 +228,8 @@ class SegGenerator(BaseNetwork):
         conv7 = self.conv7(torch.cat((conv3, self.up7(conv6)), 1))
         conv8 = self.conv8(torch.cat((conv2, self.up8(conv7)), 1))
         conv9 = self.conv9(torch.cat((conv1, self.up9(conv8)), 1))
-        return self.sigmoid(conv9)
+        return conv9
+        # return self.sigmoid(conv9)
 
 
 # ----------------------------------------------------------------------------------------------------------------------

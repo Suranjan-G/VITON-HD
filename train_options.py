@@ -17,7 +17,7 @@ def get_args():
 
     parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
     parser.add_argument('--project', type=str, default='VITON-HD', help="Name of wandb project.")
-    parser.add_argument('--log_interval', type=int, default=100, metavar="N", help="Log per N steps.")
+    parser.add_argument('--log_interval', type=int, default=20, metavar="N", help="Log per N steps.")
     parser.add_argument('--seed', type=int, default=3407, metavar="N", help="Random seed.")
     parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
 
