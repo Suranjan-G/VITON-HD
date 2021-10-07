@@ -72,37 +72,7 @@ class TrainModel:
         if args.local_rank==0 and args.use_wandb:
             wandb.watch([self.segG, self.segD], log=None)
     
-    def train_epoch(self, args, epoch):
-        if args.distributed: self.train_loader.train_sampler.set_epoch(epoch)
-        segG_losses = AverageMeter()
-        segD_losses = AverageMeter()
-        tsteps = len(self.train_loader.data_loader)
-        with tqdm(enumerate(self.train_loader.data_loader), total=tsteps, desc=f"Epoch {epoch:>2}") as pbar:
-            for step, batch in pbar:
-                batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
-                # img = batch['img']
-                # img_agnostic = batch['img_agnostic']
-                parse_target_down = batch['parse_target_down']
-                parse_agnostic = batch['parse_agnostic']
-                pose = batch['pose']
-                cloth = batch['cloth']
-                cloth_mask = batch['cloth_mask']
-
-                seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
-                                                            parse_agnostic, pose, cloth, cloth_mask,
-                                                            step==(tsteps-1))
-
-                segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
-                segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
-                if args.local_rank == 0:
-                    if not step % args.log_interval:
-                        info = {'SegG Loss': float(segG_losses.avg), 'SegD Loss': float(segD_losses.avg)}
-                        if args.use_wandb: wandb.log(info)
-                        pbar.set_postfix(info)
-                self.scaler.update()
-        return seg_im_log
-    
-    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_im=False):
+    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_im_log=False):
         with amp.autocast(enabled=args.use_amp):
             # Part 1. Segmentation generation
             parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
@@ -117,7 +87,7 @@ class TrainModel:
             lambda_ce = 10
             seg_lossG = lambda_ce * self.ce_loss(parse_pred_down, parse_target_mx)
 
-            fake_out = self.segD(torch.cat((seg_input, parse_pred_down.detach()), dim=1))
+            fake_out = self.segD(torch.cat((seg_input, parse_pred_down), dim=1))
             real_out = self.segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
             seg_lossG += self.criterion_gan(fake_out, True)                          # Treat fake images as real to train the Generator.
             seg_lossD = (self.criterion_gan(real_out, True)     # Treat real as real
@@ -134,7 +104,7 @@ class TrainModel:
         self.optimizer_seg.zero_grad(set_to_none=True)
     
         im_log = {}
-        if get_im:
+        if get_im_log:
             parse_pred_mx = parse_pred_down.argmax(dim=1)
             im_log['seg_real'] = (parse_target_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
             im_log['seg_pred'] = (parse_pred_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
@@ -176,6 +146,51 @@ class TrainModel:
         output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
         return
     
+    def train_epoch(self, args, epoch):
+        if args.distributed: self.train_loader.train_sampler.set_epoch(epoch)
+        segG_losses = AverageMeter()
+        segD_losses = AverageMeter()
+        tsteps = len(self.train_loader.data_loader)
+        with tqdm(enumerate(self.train_loader.data_loader), total=tsteps, desc=f"Epoch {epoch:>2}") as pbar:
+            for step, batch in pbar:
+                batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
+                # img = batch['img']
+                # img_agnostic = batch['img_agnostic']
+                parse_target_down = batch['parse_target_down']
+                parse_agnostic = batch['parse_agnostic']
+                pose = batch['pose']
+                cloth = batch['cloth']
+                cloth_mask = batch['cloth_mask']
+
+                seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
+                                                            parse_agnostic, pose, cloth, cloth_mask,
+                                                            get_im_log=step==(tsteps-1))
+
+                segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
+                segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
+                if args.local_rank == 0:
+                    if not step % args.log_interval:
+                        info = {'SegG Loss': float(segG_losses.avg), 'SegD Loss': float(segD_losses.avg)}
+                        if args.use_wandb: wandb.log(info)
+                        pbar.set_postfix(info)
+                self.scaler.update()
+        return seg_im_log
+    
+    def train_loop(self, args, init_epoch=0):
+        for epoch in range(init_epoch, args.epochs):
+            seg_im_log = self.train_epoch(args, epoch)
+            if args.local_rank == 0:
+                if args.use_wandb:
+                    wandb.log({'epoch': epoch})
+                    im_dict = {}
+                    for k in seg_im_log:
+                        im_dict[k] = []
+                        for img in seg_im_log[k]:
+                            im_dict[k].append(wandb.Image(img))
+                    wandb.log(im_dict)
+                if not epoch%10:
+                    self.save_models(args)
+    
     def save_models(self, args):
         synchronize()
         if args.local_rank == 0:
@@ -197,20 +212,8 @@ def main():
     print(args)
     seed_everything(args.seed)
     try:
-        init_epoch = 0
         tm = TrainModel(args)
-        for epoch in range(init_epoch, args.epochs):
-            seg_im_log = tm.train_epoch(args, epoch)
-            if args.local_rank == 0:
-                if args.use_wandb:
-                    wandb.log({'epoch': epoch})
-                    im_dict = {}
-                    for k in seg_im_log:
-                        for img in seg_im_log[k]:
-                            im_dict[k] = wandb.Image(img)
-                    wandb.log(im_dict)
-                if not epoch%10:
-                    tm.save_models(args)
+        tm.train_loop(args)
     except KeyboardInterrupt:
         print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
     finally:
