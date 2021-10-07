@@ -49,7 +49,7 @@ class VITONDataset(data.Dataset):
             }
 
     def get_parse_agnostic(self, parse, pose_data):
-        parse_array = np.asarray(parse)
+        parse_array = np.array(parse)
         parse_upper = (parse_array == 3).astype(np.uint8) * 255
         parse_neck = (parse_array == 13).astype(np.uint8) * 255
 
@@ -69,7 +69,7 @@ class VITONDataset(data.Dataset):
                 radius = r*4 if i == pose_ids[-1] else r*15
                 mask_arm_draw.ellipse((pointx-radius, pointy-radius, pointx+radius, pointy+radius), 'white', 'white')
                 i_prev = i
-            parse_arm = np.asarray(mask_arm) * (parse_array == parse_id)
+            parse_arm = np.array(mask_arm) * (parse_array == parse_id)
             agnostic.paste(0, None, Image.fromarray(np.uint8(parse_arm), 'L'))
 
         # mask torso & neck
@@ -79,7 +79,7 @@ class VITONDataset(data.Dataset):
         return agnostic
 
     def get_img_agnostic(self, img, parse, pose_data):
-        parse_array = np.asarray(parse)
+        parse_array = np.array(parse)
         parse_head = (parse_array == 2).astype(np.uint8) * 255
         parse_lower = ((parse_array == 4).astype(np.uint8) +
                        (parse_array == 7).astype(np.uint8) +
@@ -134,7 +134,7 @@ class VITONDataset(data.Dataset):
 
         cloth_mask = Image.open(osp.join(self.data_path, 'cloth-mask', img_name)).convert('L')
         cloth_mask = TF.resize(cloth_mask, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
-        cloth_mask = np.asarray(cloth_mask)
+        cloth_mask = np.array(cloth_mask)
         cloth_mask = (cloth_mask >= 128).astype(np.float32)
         cloth_mask = torch.from_numpy(cloth_mask)  # [0,1]
         cloth_mask.unsqueeze_(0)
@@ -149,12 +149,12 @@ class VITONDataset(data.Dataset):
         with open(osp.join(self.data_path, 'openpose-json', pose_name), 'r') as f:
             pose_label = json.load(f)
             pose_data = pose_label['people'][0]['pose_keypoints_2d']
-            pose_data = np.asarray(pose_data)
+            pose_data = np.array(pose_data)
             pose_data = pose_data.reshape((-1, 3))[:, :2]
 
         # load parsing image
         parse = Image.open(osp.join(self.data_path, 'image-parse', img_name))
-        parse = np.asarray(parse)
+        parse = np.array(parse)
         parse_orig = parse.copy()
         for k,v in self.labels.items():
             for l in v[1]:
@@ -162,14 +162,14 @@ class VITONDataset(data.Dataset):
         del parse_orig
         parse = Image.fromarray(parse)
         parse_down = TF.resize(parse, (256, 192), interpolation=InterpolationMode.NEAREST)
-        parse_down = torch.from_numpy(np.asarray(parse_down)[None]).long()
+        parse_down = torch.from_numpy(np.array(parse_down)[None]).long()
         parse_down[parse_down==13] = 0
         parse_down_map = torch.zeros(self.semantic_nc, 256, 192, dtype=torch.float)
         parse_down_map.scatter_(0, parse_down, 1.0)
 
         parse = TF.resize(parse, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
         parse_agnostic = self.get_parse_agnostic(parse, pose_data)
-        parse_agnostic = torch.from_numpy(np.asarray(parse_agnostic)[None]).long()
+        parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).long()
         parse_agnostic[parse_agnostic==13] = 0
         parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
         parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
