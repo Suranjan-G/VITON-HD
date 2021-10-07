@@ -49,7 +49,7 @@ class BaseNetwork(nn.Module):
         pass
 
 class MultiscaleDiscriminator(BaseNetwork):
-    def __init__(self, args, input_nc, ndf=64, n_layers=5, norm_layer=nn.InstanceNorm2d,
+    def __init__(self, args, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d,
                  use_sigmoid=False, num_D=2, getIntermFeat=False):
         super().__init__()
         self.num_D = num_D
