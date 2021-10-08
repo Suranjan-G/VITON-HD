@@ -151,8 +151,8 @@ class TrainModel:
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
         tsteps = len(self.train_loader.data_loader)
-        with tqdm(enumerate(self.train_loader.data_loader), total=tsteps, desc=f"Epoch {epoch:>2}") as pbar:
-            for step, batch in pbar:
+        with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
+            for step, batch in enumerate(pbar):
                 batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
                 # img = batch['img']
                 # img_agnostic = batch['img_agnostic']
