@@ -132,7 +132,9 @@ class VITONDataset(data.Dataset):
         cloth = TF.resize(cloth, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
         cloth = self.transform(cloth)  # [-1,1]
 
-        cloth_mask = Image.open(osp.join(self.data_path, 'cloth-mask', img_name)).convert('L')
+        ext = img_name.split('.')[-1]
+        cmask_name = img_name.replace(f'.{ext}', '.png')
+        cloth_mask = Image.open(osp.join(self.data_path, 'cloth-mask', cmask_name)).convert('L')
         cloth_mask = TF.resize(cloth_mask, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
         cloth_mask = np.array(cloth_mask)
         cloth_mask = (cloth_mask >= 128).astype(np.float32)
@@ -140,7 +142,6 @@ class VITONDataset(data.Dataset):
         cloth_mask.unsqueeze_(0)
 
         # load pose image
-        ext = img_name.split('.')[-1]
         pose_name = img_name.replace(f'.{ext}', '_rendered.png')
         pose_rgb = Image.open(osp.join(self.data_path, 'openpose-img', pose_name))
         pose_rgb = TF.resize(pose_rgb, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
