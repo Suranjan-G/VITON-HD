@@ -147,7 +147,7 @@ class VITONDataset(data.Dataset):
         pose_rgb = TF.resize(pose_rgb, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
         pose_rgb = self.transform(pose_rgb)  # [-1,1]
 
-        pose_name = img_name.replace('.{ext}', '_keypoints.json')
+        pose_name = img_name.replace(f'.{ext}', '_keypoints.json')
         with open(osp.join(self.data_path, 'openpose-json', pose_name), 'r') as f:
             pose_label = json.load(f)
             pose_data = pose_label['people'][0]['pose_keypoints_2d']
@@ -155,7 +155,7 @@ class VITONDataset(data.Dataset):
             pose_data = pose_data.reshape((-1, 3))[:, :2]
 
         # load parsing image
-        parse_name = img_name.replace('.{ext}', '.png')
+        parse_name = img_name.replace(f'.{ext}', '.png')
         parse = Image.open(osp.join(self.data_path, 'image-parse', parse_name))
         parse = np.array(parse)
         parse_orig = parse.copy()

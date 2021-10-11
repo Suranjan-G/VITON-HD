@@ -4,9 +4,9 @@ python3 train.py \
     --batch_size 16 \
     --project VITON-HD \
     --shuffle \
-    --sync_bn \
     --load_height 1024 \
     --load_width 768 \
     --use_wandb \
     --log_interval 20 \
-    --workers 4
+    --workers 4 \
+    --dataset_dir /home/azureuser/data/docker_data
