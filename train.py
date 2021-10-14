@@ -1,8 +1,8 @@
 import os
 import wandb
 from tqdm import tqdm
-import torchgeometry as tgm
 
+import torchgeometry as tgm
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -33,8 +33,8 @@ class TrainModel:
         # load_checkpoint(self.gmm, os.path.join(args.checkpoint_dir, args.gmm_checkpoint))
         # load_checkpoint(alias, os.path.join(args.checkpoint_dir, args.alias_checkpoint))
 
-        # self.gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(self.device)
-        # self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
+        self.gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(self.device)
+        self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
         self.criterion_gan = GANLoss(use_lsgan=not args.no_lsgan)
         self.ce_loss = nn.CrossEntropyLoss()
@@ -87,6 +87,7 @@ class TrainModel:
             lambda_ce = 10
             seg_lossG = lambda_ce * self.ce_loss(parse_pred_down, parse_target_mx)
 
+            parse_pred_down = F.softmax(parse_pred_down, dim=1)
             fake_out = self.segD(torch.cat((seg_input, parse_pred_down), dim=1))
             real_out = self.segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
             seg_lossG += self.criterion_gan(fake_out, True)                          # Treat fake images as real to train the Generator.
@@ -115,13 +116,13 @@ class TrainModel:
         # convert 13 channel body parse to 7 channel parse.
         parse_target = self.gauss(self.up(parse_target_down))
         parse_target = parse_target.argmax(dim=1, keepdim=True)
-        parse_old = torch.zeros(parse_target.size(0), 13, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
-        parse_old.scatter_(1, parse_target, 1.0)
+        parse_orig = parse_target.copy()
+        for k,v in self.parse_labels.items():
+            for l in v[1]:
+                parse_target[parse_orig==l] = k
 
         parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
-        for j in range(len(self.parse_labels)):
-            for lbl in self.parse_labels[j][1]:
-                parse[:, j] += parse_old[:, lbl]
+        parse.scatter_(1, parse_target, 1.0)
 
         # Part 2. Clothes Deformation
         agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')

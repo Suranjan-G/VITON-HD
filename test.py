@@ -80,7 +80,7 @@ def test(opt, seg, gmm, alias):
 
             parse_pred_down = F.softmax(seg(seg_input), dim=1)
             parse_pred = gauss(up(parse_pred_down))
-            parse_pred = parse_pred.argmax(dim=1)[:, None]
+            parse_pred = parse_pred.argmax(dim=1, keepdim=True)
 
             parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float).cuda()
             parse_old.scatter_(1, parse_pred, 1.0)
