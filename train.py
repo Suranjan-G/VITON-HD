@@ -46,13 +46,13 @@ class TrainModel:
         self.scaler = amp.GradScaler(enabled=args.use_amp)
 
         self.parse_labels = {
-                0:  ['background',  [0]],
-                1:  ['paste',       [2, 4, 7, 8, 9, 10, 11]],   # contains face and lower body.
-                2:  ['upper',       [3]],
-                3:  ['hair',        [1]],
-                4:  ['left_arm',    [5]],
-                5:  ['right_arm',   [6]],
-                6:  ['noise',       [12]]
+                # 0:  ['background',  [0]],
+                # 1:  ['hair',        [1]],
+                # 3:  ['upper',       [3]],
+                # 5:  ['left_arm',    [5]],
+                # 6:  ['right_arm',   [6]],
+                4:  ['noise',       [12]],
+                2:  ['paste',       [2, 4, 7, 8, 9, 10, 11]],   # contains face and lower body.
             }
         if args.distributed:
             dist.init_process_group(backend="nccl")
@@ -72,7 +72,7 @@ class TrainModel:
         if args.local_rank==0 and args.use_wandb:
             wandb.watch([self.segG, self.segD], log=None)
     
-    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_im_log=False):
+    def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_img_log=False):
         with amp.autocast(enabled=args.use_amp):
             # Part 1. Segmentation generation
             parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
@@ -105,30 +105,19 @@ class TrainModel:
         self.optimizer_seg.zero_grad(set_to_none=True)
     
         im_log = {}
-        if get_im_log:
+        if get_img_log:
             parse_pred_mx = parse_pred_down.argmax(dim=1)
             im_log['seg_real'] = (parse_target_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
             im_log['seg_pred'] = (parse_pred_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
         return seg_lossG.detach_(), seg_lossD.detach_(), im_log
 
 
-    def gmm_train_step(self, args, img, img_agnostic, parse_target_down, pose, cloth, cloth_mask):
-        # convert 13 channel body parse to 7 channel parse.
-        parse_target = self.gauss(self.up(parse_target_down))
-        parse_target = parse_target.argmax(dim=1, keepdim=True)
-        parse_orig = parse_target.copy()
-        for k,v in self.parse_labels.items():
-            for l in v[1]:
-                parse_target[parse_orig==l] = k
-
-        parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
-        parse.scatter_(1, parse_target, 1.0)
-
+    def gmm_train_step(self, args, img, img_agnostic, parse, pose, cloth, cloth_mask, get_img_log=False):
         # Part 2. Clothes Deformation
-        agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='nearest')
-        parse_cloth_gmm = F.interpolate(parse[:, 2:3], size=(256, 192), mode='nearest')
-        pose_gmm = F.interpolate(pose, size=(256, 192), mode='nearest')
-        c_gmm = F.interpolate(cloth, size=(256, 192), mode='nearest')
+        agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='bilinear')
+        parse_cloth_gmm = F.interpolate(parse[:, 3:4], size=(256, 192), mode='nearest')
+        pose_gmm = F.interpolate(pose, size=(256, 192), mode='bilinear')
+        c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
         gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
 
         _, warped_grid = self.gmm(gmm_input, c_gmm)
@@ -139,10 +128,10 @@ class TrainModel:
 
     def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm):
         # Part 3. Try-on synthesis
-        misalign_mask = parse[:, 2:3] - warped_cm
+        misalign_mask = parse[:, 3:4] - warped_cm
         misalign_mask[misalign_mask < 0.0] = 0.0
         parse_div = torch.cat((parse, misalign_mask), dim=1)
-        parse_div[:, 2:3] -= misalign_mask
+        parse_div[:, 3:4] -= misalign_mask
 
         output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
         return
@@ -155,8 +144,8 @@ class TrainModel:
         with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
             for step, batch in enumerate(pbar):
                 batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
-                # img = batch['img']
-                # img_agnostic = batch['img_agnostic']
+                img = batch['img']
+                img_agnostic = batch['img_agnostic']
                 parse_target_down = batch['parse_target_down']
                 parse_agnostic = batch['parse_agnostic']
                 pose = batch['pose']
@@ -165,10 +154,28 @@ class TrainModel:
 
                 seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
                                                             parse_agnostic, pose, cloth, cloth_mask,
-                                                            get_im_log=step==(tsteps-1))
+                                                            get_img_log=step==(tsteps-1))
 
                 segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
                 segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
+
+                # convert 13 channel body parse to 7 channel parse.
+                parse_target = self.gauss(self.up(parse_target_down))
+                parse_target = parse_target.argmax(dim=1, keepdim=True)
+                parse_orig = parse_target.copy()
+                for k,v in self.parse_labels.items():
+                    for l in v[1]:
+                        if l!=k:
+                            parse_target[parse_orig==l] = k
+
+                parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
+                parse.scatter_(1, parse_target, 1.0)
+
+                gmm_lossG, gmm_lossD, gmm_im_log = self.gmm_train_step(self, args, img, img_agnostic, parse,
+                                                            pose, cloth, cloth_mask,
+                                                            get_img_log=step==(tsteps-1))
+
+
                 if args.local_rank == 0:
                     if not step % args.log_interval:
                         info = {'SegG Loss': float(segG_losses.avg), 'SegD Loss': float(segD_losses.avg)}

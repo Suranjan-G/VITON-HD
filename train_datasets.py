@@ -31,27 +31,27 @@ class VITONDataset(data.Dataset):
 
         self.labels = {
                 # 0: ['background', [0, 10]],
-                # 1: ['hair', [1, 2]],
                 0: ['background', [0]],
-                1: ['hair', [2]],
-                2: ['face', [4, 13]],
-                3: ['upper', [5, 6, 7]],
-                4: ['bottom', [9, 12]],
+                1: ['hair', [1, 2]],
+                2: ['left_shoe', [18]],
+                3: ['noise', [3, 11]],
+                4: ['face', [4, 13]],
                 5: ['left_arm', [14]],
                 6: ['right_arm', [15]],
-                7: ['left_leg', [16]],
-                8: ['right_leg', [17]],
-                9: ['left_shoe', [18]],
-                10: ['right_shoe', [19]],
-                11: ['socks', [8]],
-                12: ['noise', [3, 11]],
-                13: ['neck', [10]],
+                7: ['upper', [5, 6, 7]],
+                8: ['socks', [8]],
+                9: ['bottom', [9, 12]],
+                10: ['neck', [10]],
+                11: ['left_leg', [16]],
+                12: ['right_leg', [17]],
+                13: ['right_shoe', [19]],
             }
+
 
     def get_parse_agnostic(self, parse, pose_data):
         parse_array = np.array(parse)
-        parse_upper = (parse_array == 3).astype(np.uint8) * 255
-        parse_neck = (parse_array == 13).astype(np.uint8) * 255
+        parse_upper = (parse_array == 7).astype(np.uint8) * 255
+        parse_neck = (parse_array == 10).astype(np.uint8) * 255
 
         r = 10
         agnostic = parse.copy()
@@ -80,12 +80,12 @@ class VITONDataset(data.Dataset):
 
     def get_img_agnostic(self, img, parse, pose_data):
         parse_array = np.array(parse)
-        parse_head = (parse_array == 2).astype(np.uint8) * 255
-        parse_lower = ((parse_array == 4).astype(np.uint8) +
-                       (parse_array == 7).astype(np.uint8) +
-                       (parse_array == 8).astype(np.uint8) +
-                       (parse_array == 9).astype(np.uint8) +
-                       (parse_array == 10).astype(np.uint8)) * 255
+        parse_head = (parse_array == 4).astype(np.uint8) * 255
+        parse_lower = ((parse_array == 9).astype(np.uint8) +
+                       (parse_array == 11).astype(np.uint8) +
+                       (parse_array == 12).astype(np.uint8) +
+                       (parse_array == 2).astype(np.uint8) +
+                       (parse_array == 13).astype(np.uint8)) * 255
 
         r = 20
         agnostic = img.copy()
@@ -161,7 +161,8 @@ class VITONDataset(data.Dataset):
         parse_orig = parse.copy()
         for k,v in self.labels.items():
             for l in v[1]:
-                parse[parse_orig==l] = k
+                if l!=k:
+                    parse[parse_orig==l] = k
         del parse_orig
         parse = Image.fromarray(parse)
         parse_down = TF.resize(parse, (256, 192), interpolation=InterpolationMode.NEAREST)
@@ -178,15 +179,15 @@ class VITONDataset(data.Dataset):
         parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 
         # load person image
-        # img = Image.open(osp.join(self.data_path, 'image', img_name))
-        # img = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(img)
-        # img_agnostic = self.get_img_agnostic(img, parse, pose_data)
-        # img = self.transform(img)
-        # img_agnostic = self.transform(img_agnostic)  # [-1,1]
+        img = Image.open(osp.join(self.data_path, 'image', img_name))
+        img = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(img)
+        img_agnostic = self.get_img_agnostic(img, parse, pose_data)
+        img = self.transform(img)
+        img_agnostic = self.transform(img_agnostic)  # [-1,1]
 
         result = {
-            # 'img': img,
-            # 'img_agnostic': img_agnostic,
+            'img': img,
+            'img_agnostic': img_agnostic,
             'parse_target_down': parse_down_map,
             'parse_agnostic': parse_agnostic_map,
             'pose': pose_rgb,
