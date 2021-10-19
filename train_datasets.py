@@ -167,14 +167,14 @@ class VITONDataset(data.Dataset):
         parse = Image.fromarray(parse)
         parse_down = TF.resize(parse, (256, 192), interpolation=InterpolationMode.NEAREST)
         parse_down = torch.from_numpy(np.array(parse_down)[None]).long()
-        parse_down[parse_down==13] = 0
+        parse_down[parse_down==10] = 0
         parse_down_map = torch.zeros(self.semantic_nc, 256, 192, dtype=torch.float)
         parse_down_map.scatter_(0, parse_down, 1.0)
 
         parse = TF.resize(parse, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
         parse_agnostic = self.get_parse_agnostic(parse, pose_data)
         parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).long()
-        parse_agnostic[parse_agnostic==13] = 0
+        parse_agnostic[parse_agnostic==10] = 0
         parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
         parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 

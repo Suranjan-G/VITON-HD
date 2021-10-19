@@ -24,7 +24,7 @@ class TrainModel:
         self.memory_format = torch.channels_last if args.memory_format == "channels_last" else torch.contiguous_format
         self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).train().to(self.device, memory_format=self.memory_format)
         self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format)
-        # self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).train().to(self.device, memory_format=self.memory_format)
+        self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 7
         # alias = ALIASGenerator(args, input_nc=9).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 13
@@ -38,21 +38,24 @@ class TrainModel:
 
         self.criterion_gan = GANLoss(use_lsgan=not args.no_lsgan)
         self.ce_loss = nn.CrossEntropyLoss()
+        self.l1_loss = nn.L1Loss()
 
-        self.optimizer_seg = optim.Adam(list(self.segG.parameters()) + list(self.segD.parameters()),
-                                        lr=0.0004, betas=(0.5,0.999))
+        self.optimizer_seg = optim.Adam(list(self.segG.parameters()) + list(self.segD.parameters()), lr=0.0004, betas=(0.5,0.999))
         self.optimizer_seg.zero_grad(set_to_none=True)
+
+        self.optimizer_gmm = optim.Adam(self.gmm.parameters(), lr=0.0002, betas=(0.5,0.999))
+        self.optimizer_gmm.zero_grad(set_to_none=True)
 
         self.scaler = amp.GradScaler(enabled=args.use_amp)
 
         self.parse_labels = {
-                # 0:  ['background',  [0]],
-                # 1:  ['hair',        [1]],
-                # 3:  ['upper',       [3]],
-                # 5:  ['left_arm',    [5]],
-                # 6:  ['right_arm',   [6]],
-                4:  ['noise',       [12]],
-                2:  ['paste',       [2, 4, 7, 8, 9, 10, 11]],   # contains face and lower body.
+                0:  ['background',  [0]],
+                1:  ['hair',        [1]],
+                2:  ['paste',       [2, 4, 8, 9, 11, 12, 13]],   # contains face and lower body.
+                3:  ['upper',       [7]],
+                4:  ['noise',       [3]],
+                5:  ['left_arm',    [5]],
+                6:  ['right_arm',   [6]],
             }
         if args.distributed:
             dist.init_process_group(backend="nccl")
@@ -118,12 +121,22 @@ class TrainModel:
         parse_cloth_gmm = F.interpolate(parse[:, 3:4], size=(256, 192), mode='nearest')
         pose_gmm = F.interpolate(pose, size=(256, 192), mode='bilinear')
         c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
-        gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
-
-        _, warped_grid = self.gmm(gmm_input, c_gmm)
-        warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
-        warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
-        return
+        with amp.autocast(enabled=args.use_amp):
+            gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
+            _, warped_grid = self.gmm(gmm_input, c_gmm)
+            warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
+            # warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
+            cloth_target = img*parse_cloth_gmm
+            gmm_loss = self.l1_loss(warped_c, cloth_target)
+        
+        self.scaler.scale(gmm_loss).backward()
+        self.scaler.step(self.optimizer_gmm)
+        self.optimizer_gmm.zero_grad(set_to_none=True)
+        im_log = {}
+        if get_img_log:
+            im_log['gmm_real'] = cloth_target.cpu().numpy()
+            im_log['gmm_pred'] = warped_c.cpu().numpy()
+        return gmm_loss.detach_(), 
 
 
     def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm):
