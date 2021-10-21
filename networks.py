@@ -290,11 +290,90 @@ class FeatureRegression(nn.Module):
         x = self.linear(x.reshape(x.size(0), -1))
         return self.tanh(x)
 
+class BoundedGridLocNet(nn.Module):
+    def __init__(self):
+        super(BoundedGridLocNet, self).__init__()
+        self.rx, self.ry, self.cx, self.cy = torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda')
+        self.rg, self.cg = torch.tensor(0.02, device='cuda'), torch.tensor(0.02, device='cuda')
+
+    def forward(self, coor):
+        # coor [batch_size, -1, 2]
+        row = self.get_row(coor, 5)
+        col = self.get_col(coor, 5)
+        rg_loss = sum(self.grad_row(coor, 5))
+        cg_loss = sum(self.grad_col(coor, 5))
+        rg_loss = torch.max(rg_loss, self.rg)
+        cg_loss = torch.max(cg_loss, self.cg)
+        row_x,row_y=row[:,:,0], row[:,:,1]
+        col_x,col_y=col[:,:,0], col[:,:,1]
+        rx_loss=torch.max(self.rx, row_x).mean()
+        ry_loss=torch.max(self.ry, row_y).mean()
+        cx_loss=torch.max(self.cx, col_x).mean()
+        cy_loss=torch.max(self.cy, col_y).mean()
+        return coor, rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss
+
+    def get_row(self, coor, num):
+        sec_dic=[]
+        for j in range(num):
+            sum=0
+            buffer=0
+            flag=False
+            for i in range(num-1):
+                differ=(coor[:,j*num+i+1,:]-coor[:,j*num+i,:])**2
+                if not flag:
+                    second_dif=0
+                    flag=True
+                else:
+                    second_dif=torch.abs(differ-buffer)
+                    sec_dic.append(second_dif)
+                buffer=differ
+                sum+=second_dif
+        return torch.stack(sec_dic,dim=1)
+
+    def get_col(self, coor, num):
+        sec_dic=[]
+        for i in range(num):
+            sum = 0
+            buffer = 0
+            flag = False
+            for j in range(num - 1):
+                differ = (coor[:, (j+1) * num + i , :] - coor[:, j * num + i, :]) ** 2
+                if not flag:
+                    second_dif = 0
+                    flag = True
+                else:
+                    second_dif = torch.abs(differ-buffer)
+                    sec_dic.append(second_dif)
+                buffer = differ
+                sum += second_dif
+        return torch.stack(sec_dic,dim=1)
+
+    def grad_row(self, coor, num):
+        sec_term = []
+        for j in range(num):
+            for i in range(1, num - 1):
+                x0, y0 = coor[:, j * num + i - 1, :][0]
+                x1, y1 = coor[:, j * num + i + 0, :][0]
+                x2, y2 = coor[:, j * num + i + 1, :][0]
+                grad = torch.abs((y1 - y0) * (x1 - x2) - (y1 - y2) * (x1 - x0))
+                sec_term.append(grad)
+        return sec_term
+
+    def grad_col(self, coor, num):
+        sec_term = []
+        for i in range(num):
+            for j in range(1, num - 1):
+                x0, y0 = coor[:, (j - 1) * num + i, :][0]
+                x1, y1 = coor[:, j * num + i, :][0]
+                x2, y2 = coor[:, (j + 1) * num + i, :][0]
+                grad = torch.abs((y1 - y0) * (x1 - x2) - (y1 - y2) * (x1 - x0))
+                sec_term.append(grad)
+        return sec_term
+
 
 class TpsGridGen(nn.Module):
     def __init__(self, args, dtype=torch.float):
         super().__init__()
-
         # Create a grid in numpy.
         # TODO: set an appropriate interval ([-1, 1] in CP-VTON, [-0.9, 0.9] in the current version of VITON-HD)
         grid_X, grid_Y = np.meshgrid(np.linspace(-0.9, 0.9, args.load_width), np.linspace(-0.9, 0.9, args.load_height))
@@ -323,6 +402,8 @@ class TpsGridGen(nn.Module):
         self.register_buffer('P_X', P_X, False)
         self.register_buffer('P_Y', P_Y, False)
 
+        self.loc_net = BoundedGridLocNet()
+
     # TODO: refactor
     def compute_L_inverse(self,X,Y):
         N = X.size()[0] # num of points (along dim 0)
@@ -341,18 +422,24 @@ class TpsGridGen(nn.Module):
         return Li
 
     # TODO: refactor
-    def apply_transformation(self,theta,points):
+    def apply_transformation(self, theta, points):
+        batch_size = theta.size(0)
         if theta.dim()==2:
-            theta = theta.unsqueeze(2).unsqueeze(3)
+            # theta = theta.unsqueeze(2).unsqueeze(3)
+            theta = theta.view(batch_size, -1, 2)
         # points should be in the [B,H,W,2] format,
         # where points[:,:,:,0] are the X coords
         # and points[:,:,:,1] are the Y coords
 
+        # second-order difference constraint
+        theta, rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(theta)
+
         # inp are the corresponding control points P_i
-        batch_size = theta.size()[0]
         # split theta into point coordinates
-        Q_X=theta[:,:self.N,:,:].squeeze(3)
-        Q_Y=theta[:,self.N:,:,:].squeeze(3)
+        Q_X = theta[:,:,0:1]
+        Q_Y = theta[:,:,1:2]
+        # Q_X=theta[:,:self.N,:,:].squeeze(3)
+        # Q_Y=theta[:,self.N:,:,:].squeeze(3)
         Q_X = Q_X + self.P_X_base.expand_as(Q_X)
         Q_Y = Q_Y + self.P_Y_base.expand_as(Q_Y)
 
@@ -415,17 +502,15 @@ class TpsGridGen(nn.Module):
                        torch.mul(A_Y[:,:,:,:,2],points_Y_batch) + \
                        torch.sum(torch.mul(W_Y,U.expand_as(W_Y)),4)
 
-        return torch.cat((points_X_prime,points_Y_prime),3)
+        return torch.cat((points_X_prime,points_Y_prime),3), rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss
 
     def forward(self, theta):
-        warped_grid = self.apply_transformation(theta, torch.cat((self.grid_X, self.grid_Y), 3))
-        return warped_grid
+        return self.apply_transformation(theta, torch.cat((self.grid_X, self.grid_Y), 3))
 
 
 class GMM(nn.Module):
     def __init__(self, args, inputA_nc, inputB_nc):
         super().__init__()
-
         self.extractionA = FeatureExtraction(inputA_nc, ngf=64, num_layers=4)
         self.extractionB = FeatureExtraction(inputB_nc, ngf=64, num_layers=4)
         self.correlation = FeatureCorrelation()
@@ -498,7 +583,7 @@ class ALIASNorm(nn.Module):
     def forward(self, x, seg, misalign_mask=None):
         # Part 1. Generate parameter-free normalized activations.
         b, c, h, w = x.size()
-        noise = (torch.randn(b, w, h, 1).cuda() * self.noise_scale).transpose(1, 3)
+        noise = (torch.randn(b, w, h, 1, device='cuda') * self.noise_scale).transpose(1, 3)
 
         if misalign_mask is None:
             normalized = self.param_free_norm(x + noise)
