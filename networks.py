@@ -291,17 +291,18 @@ class FeatureRegression(nn.Module):
         return self.tanh(x)
 
 class BoundedGridLocNet(nn.Module):
-    def __init__(self):
+    def __init__(self, args):
         super(BoundedGridLocNet, self).__init__()
+        self.grid_size = args.grid_size
         self.rx, self.ry, self.cx, self.cy = torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda'), torch.tensor(0.08, device='cuda')
         self.rg, self.cg = torch.tensor(0.02, device='cuda'), torch.tensor(0.02, device='cuda')
 
     def forward(self, coor):
         # coor [batch_size, -1, 2]
-        row = self.get_row(coor, 5)
-        col = self.get_col(coor, 5)
-        rg_loss = sum(self.grad_row(coor, 5))
-        cg_loss = sum(self.grad_col(coor, 5))
+        row = self.get_row(coor, self.grid_size)
+        col = self.get_col(coor, self.grid_size)
+        rg_loss = sum(self.grad_row(coor, self.grid_size))
+        cg_loss = sum(self.grad_col(coor, self.grid_size))
         rg_loss = torch.max(rg_loss, self.rg)
         cg_loss = torch.max(cg_loss, self.cg)
         row_x,row_y=row[:,:,0], row[:,:,1]
@@ -310,7 +311,7 @@ class BoundedGridLocNet(nn.Module):
         ry_loss=torch.max(self.ry, row_y).mean()
         cx_loss=torch.max(self.cx, col_x).mean()
         cy_loss=torch.max(self.cy, col_y).mean()
-        return coor, rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss
+        return rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss
 
     def get_row(self, coor, num):
         sec_dic=[]
@@ -402,8 +403,6 @@ class TpsGridGen(nn.Module):
         self.register_buffer('P_X', P_X, False)
         self.register_buffer('P_Y', P_Y, False)
 
-        self.loc_net = BoundedGridLocNet()
-
     # TODO: refactor
     def compute_L_inverse(self,X,Y):
         N = X.size()[0] # num of points (along dim 0)
@@ -422,17 +421,9 @@ class TpsGridGen(nn.Module):
         return Li
 
     # TODO: refactor
-    def apply_transformation(self, theta, points):
+    def forward(self, theta):
+        points = torch.cat((self.grid_X, self.grid_Y), 3)
         batch_size = theta.size(0)
-        if theta.dim()==2:
-            # theta = theta.unsqueeze(2).unsqueeze(3)
-            theta = theta.view(batch_size, -1, 2)
-        # points should be in the [B,H,W,2] format,
-        # where points[:,:,:,0] are the X coords
-        # and points[:,:,:,1] are the Y coords
-
-        # second-order difference constraint
-        theta, rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(theta)
 
         # inp are the corresponding control points P_i
         # split theta into point coordinates
@@ -502,10 +493,7 @@ class TpsGridGen(nn.Module):
                        torch.mul(A_Y[:,:,:,:,2],points_Y_batch) + \
                        torch.sum(torch.mul(W_Y,U.expand_as(W_Y)),4)
 
-        return torch.cat((points_X_prime,points_Y_prime),3), rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss
-
-    def forward(self, theta):
-        return self.apply_transformation(theta, torch.cat((self.grid_X, self.grid_Y), 3))
+        return torch.cat((points_X_prime, points_Y_prime), 3)
 
 
 class GMM(nn.Module):
@@ -523,7 +511,8 @@ class GMM(nn.Module):
         featureB = F.normalize(self.extractionB(inputB), dim=1)
         corr = self.correlation(featureA, featureB)
         theta = self.regression(corr)
-
+        batch_size = theta.size(0)
+        theta = theta.view(batch_size, -1, 2)
         warped_grid = self.gridGen(theta)
         return theta, warped_grid
 

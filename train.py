@@ -13,7 +13,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from train_datasets import VITONDataset, VITONDataLoader
-from networks import SegGenerator, GMM, ALIASGenerator, MultiscaleDiscriminator, GANLoss
+from networks import SegGenerator, GMM, BoundedGridLocNet, ALIASGenerator, MultiscaleDiscriminator, GANLoss
 from utils import cleanup, gen_noise, seed_everything, load_checkpoint, synchronize, AverageMeter
 from train_options import get_args
 
@@ -25,6 +25,7 @@ class TrainModel:
         self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).train().to(self.device, memory_format=self.memory_format)
         self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format)
         self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).train().to(self.device, memory_format=self.memory_format)
+        self.loc_net = BoundedGridLocNet(args)
         # args.semantic_nc = 7
         # alias = ALIASGenerator(args, input_nc=9).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 13
@@ -123,11 +124,13 @@ class TrainModel:
         c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
         with amp.autocast(enabled=args.use_amp):
             gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
-            _, warped_grid = self.gmm(gmm_input, c_gmm)
+            theta, warped_grid = self.gmm(gmm_input, c_gmm)
+            # second-order difference constraint
+            rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(theta)
             warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
             # warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
             cloth_target = img*parse_cloth_gmm
-            gmm_loss = self.l1_loss(warped_c, cloth_target)
+            gmm_loss = self.l1_loss(warped_c, cloth_target) + torch.mean(0.04*(rx_loss+ry_loss+cx_loss+cy_loss+rg_loss+cg_loss))
         
         self.scaler.scale(gmm_loss).backward()
         self.scaler.step(self.optimizer_gmm)
