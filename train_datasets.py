@@ -41,17 +41,17 @@ class VITONDataset(data.Dataset):
                 7: ['upper', [5, 6, 7]],
                 8: ['socks', [8]],
                 9: ['bottom', [9, 12]],
-                10: ['neck', [10]],
+                10: ['right_shoe', [19]],
                 11: ['left_leg', [16]],
                 12: ['right_leg', [17]],
-                13: ['right_shoe', [19]],
+                13: ['neck', [10]],
             }
 
 
     def get_parse_agnostic(self, parse, pose_data):
         parse_array = np.array(parse)
         parse_upper = (parse_array == 7).astype(np.uint8) * 255
-        parse_neck = (parse_array == 10).astype(np.uint8) * 255
+        parse_neck = (parse_array == 13).astype(np.uint8) * 255
 
         r = 10
         agnostic = parse.copy()
@@ -85,7 +85,7 @@ class VITONDataset(data.Dataset):
                        (parse_array == 11).astype(np.uint8) +
                        (parse_array == 12).astype(np.uint8) +
                        (parse_array == 2).astype(np.uint8) +
-                       (parse_array == 13).astype(np.uint8)) * 255
+                       (parse_array == 10).astype(np.uint8)) * 255
 
         r = 20
         agnostic = img.copy()
@@ -167,14 +167,14 @@ class VITONDataset(data.Dataset):
         parse = Image.fromarray(parse)
         parse_down = TF.resize(parse, (256, 192), interpolation=InterpolationMode.NEAREST)
         parse_down = torch.from_numpy(np.array(parse_down)[None]).long()
-        parse_down[parse_down==10] = 0
+        parse_down[parse_down==13] = 0
         parse_down_map = torch.zeros(self.semantic_nc, 256, 192, dtype=torch.float)
         parse_down_map.scatter_(0, parse_down, 1.0)
 
         parse = TF.resize(parse, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
         # parse_agnostic = self.get_parse_agnostic(parse, pose_data)
         # parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).long()
-        # parse_agnostic[parse_agnostic==10] = 0
+        # parse_agnostic[parse_agnostic==13] = 0
         # parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
         # parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 

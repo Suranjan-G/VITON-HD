@@ -53,7 +53,7 @@ class TrainModel:
         self.parse_labels = {
                 0:  ['background',  [0]],
                 1:  ['hair',        [1]],
-                2:  ['paste',       [2, 4, 8, 9, 11, 12, 13]],   # contains face and lower body.
+                2:  ['paste',       [2, 4, 8, 9, 10, 11, 12]],   # contains face and lower body.
                 3:  ['upper',       [7]],
                 4:  ['noise',       [3]],
                 5:  ['left_arm',    [5]],
