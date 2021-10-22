@@ -31,10 +31,6 @@ class TrainModel:
         # alias = ALIASGenerator(args, input_nc=9).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 13
 
-        # load_checkpoint(self.segG, os.path.join(args.checkpoint_dir, args.seg_checkpoint))
-        # load_checkpoint(self.gmm, os.path.join(args.checkpoint_dir, args.gmm_checkpoint))
-        # load_checkpoint(alias, os.path.join(args.checkpoint_dir, args.alias_checkpoint))
-
         self.gauss = tgm.image.GaussianBlur((7, 7), (3, 3)).to(self.device)
         self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
@@ -59,6 +55,7 @@ class TrainModel:
                 5:  ['left_arm',    [5]],
                 6:  ['right_arm',   [6]],
             }
+        self.load_models(args)
         if args.distributed:
             dist.init_process_group(backend="nccl")
             if args.sync_bn:
@@ -222,7 +219,7 @@ class TrainModel:
                         for img in seg_img_log[k]:
                             im_dict[k].append(wandb.Image(img))
                     wandb.log(im_dict)
-                if not epoch%10:
+                if not epoch%5:
                     self.save_models(args)
     
     def save_models(self, args):
@@ -232,8 +229,9 @@ class TrainModel:
             torch.save(self.segD.state_dict(), os.path.join(args.checkpoint_dir, "segD.pth"))
             torch.save(self.gmm.state_dict(), os.path.join(args.checkpoint_dir, "gmm.pth"))
             torch.save(self.optimizer_seg.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_seg.pth"))
-            torch.save(self.optimizer_gmm.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_seg.pth"))
-    
+            torch.save(self.optimizer_gmm.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"))
+            print("[*] Weights saved.")
+
     def load_models(self, args):
         synchronize()
         map_location = {'cuda:0': f'cuda:{args.local_rank}'}
@@ -242,6 +240,7 @@ class TrainModel:
         self.gmm.load_state_dict(os.path.join(args.checkpoint_dir, "gmm.pth"), map_location=map_location)
         self.optimizer_seg.load_state_dict(os.path.join(args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location)
         self.optimizer_gmm.load_state_dict(os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location)
+        print("[*] Weights loaded.")
 
 
 def main():
