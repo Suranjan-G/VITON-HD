@@ -35,7 +35,7 @@ class TrainModel:
         # load_checkpoint(self.gmm, os.path.join(args.checkpoint_dir, args.gmm_checkpoint))
         # load_checkpoint(alias, os.path.join(args.checkpoint_dir, args.alias_checkpoint))
 
-        self.gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(self.device)
+        self.gauss = tgm.image.GaussianBlur((7, 7), (3, 3)).to(self.device)
         self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
         self.criterion_gan = GANLoss(use_lsgan=not args.no_lsgan)
@@ -171,6 +171,7 @@ class TrainModel:
                 pose = batch['pose']
                 cloth = batch['cloth']
                 cloth_mask = batch['cloth_mask']
+                cloth = ((cloth+1) * cloth_mask) - 1
 
                 # seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
                 #                                             parse_agnostic, pose, cloth, cloth_mask,
