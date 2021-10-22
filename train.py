@@ -231,16 +231,20 @@ class TrainModel:
             torch.save(self.optimizer_seg.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_seg.pth"))
             torch.save(self.optimizer_gmm.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"))
             print("[*] Weights saved.")
+            
 
     def load_models(self, args):
         synchronize()
         map_location = {'cuda:0': f'cuda:{args.local_rank}'}
-        self.segG.load_state_dict(os.path.join(args.checkpoint_dir, "segG.pth"), map_location=map_location)
-        self.segD.load_state_dict(os.path.join(args.checkpoint_dir, "segD.pth"), map_location=map_location)
-        self.gmm.load_state_dict(os.path.join(args.checkpoint_dir, "gmm.pth"), map_location=map_location)
-        self.optimizer_seg.load_state_dict(os.path.join(args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location)
-        self.optimizer_gmm.load_state_dict(os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location)
-        print("[*] Weights loaded.")
+        try:
+            self.segG.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "segG.pth"), map_location=map_location))
+            self.segD.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "segD.pth"), map_location=map_location))
+            self.gmm.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "gmm.pth"), map_location=map_location))
+            self.optimizer_seg.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location))
+            self.optimizer_gmm.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location))
+            print("[*] Weights loaded.")
+        except FileNotFoundError as e:
+                print(f"[!] {e}, skipping weights loading.")
 
 
 def main():
