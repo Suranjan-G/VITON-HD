@@ -172,11 +172,11 @@ class VITONDataset(data.Dataset):
         parse_down_map.scatter_(0, parse_down, 1.0)
 
         parse = TF.resize(parse, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
-        parse_agnostic = self.get_parse_agnostic(parse, pose_data)
-        parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).long()
-        parse_agnostic[parse_agnostic==10] = 0
-        parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
-        parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
+        # parse_agnostic = self.get_parse_agnostic(parse, pose_data)
+        # parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).long()
+        # parse_agnostic[parse_agnostic==10] = 0
+        # parse_agnostic_map = torch.zeros(self.semantic_nc, self.load_height, self.load_width, dtype=torch.float)
+        # parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 
         # load person image
         img = Image.open(osp.join(self.data_path, 'image', img_name))
@@ -189,7 +189,7 @@ class VITONDataset(data.Dataset):
             'img': img,
             'img_agnostic': img_agnostic,
             'parse_target_down': parse_down_map,
-            'parse_agnostic': parse_agnostic_map,
+            # 'parse_agnostic': parse_agnostic_map,
             'pose': pose_rgb,
             'cloth': cloth,
             'cloth_mask': cloth_mask,

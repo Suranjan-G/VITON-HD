@@ -1,6 +1,7 @@
 import os
 import wandb
 from tqdm import tqdm
+import numpy as np
 
 import torchgeometry as tgm
 import torch
@@ -22,8 +23,8 @@ class TrainModel:
     def __init__(self, args):
         self.device = torch.device('cuda', args.local_rank)
         self.memory_format = torch.channels_last if args.memory_format == "channels_last" else torch.contiguous_format
-        self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).train().to(self.device, memory_format=self.memory_format)
-        self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format)
+        # self.segG = SegGenerator(args, input_nc=args.semantic_nc + 8, output_nc=args.semantic_nc).train().to(self.device, memory_format=self.memory_format)
+        # self.segD = MultiscaleDiscriminator(args, args.semantic_nc + args.semantic_nc + 8, use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format)
         self.gmm = GMM(args, inputA_nc=7, inputB_nc=3).train().to(self.device, memory_format=self.memory_format)
         self.loc_net = BoundedGridLocNet(args)
         # args.semantic_nc = 7
@@ -41,8 +42,8 @@ class TrainModel:
         self.ce_loss = nn.CrossEntropyLoss()
         self.l1_loss = nn.L1Loss()
 
-        self.optimizer_seg = optim.Adam(list(self.segG.parameters()) + list(self.segD.parameters()), lr=0.0004, betas=(0.5,0.999))
-        self.optimizer_seg.zero_grad(set_to_none=True)
+        # self.optimizer_seg = optim.Adam(list(self.segG.parameters()) + list(self.segD.parameters()), lr=0.0004, betas=(0.5,0.999))
+        # self.optimizer_seg.zero_grad(set_to_none=True)
 
         self.optimizer_gmm = optim.Adam(self.gmm.parameters(), lr=0.0002, betas=(0.5,0.999))
         self.optimizer_gmm.zero_grad(set_to_none=True)
@@ -108,38 +109,40 @@ class TrainModel:
         self.scaler.step(self.optimizer_seg)
         self.optimizer_seg.zero_grad(set_to_none=True)
     
-        im_log = {}
+        img_log = {}
         if get_img_log:
             parse_pred_mx = parse_pred_down.argmax(dim=1)
-            im_log['seg_real'] = (parse_target_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
-            im_log['seg_pred'] = (parse_pred_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
-        return seg_lossG.detach_(), seg_lossD.detach_(), im_log
+            img_log['seg_real'] = (parse_target_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
+            img_log['seg_pred'] = (parse_pred_mx.detach_()*(255/args.semantic_nc)).cpu().numpy()
+        return seg_lossG.detach_(), seg_lossD.detach_(), img_log
 
 
     def gmm_train_step(self, args, img, img_agnostic, parse, pose, cloth, cloth_mask, get_img_log=False):
         # Part 2. Clothes Deformation
-        agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='bilinear')
-        parse_cloth_gmm = F.interpolate(parse[:, 3:4], size=(256, 192), mode='nearest')
-        pose_gmm = F.interpolate(pose, size=(256, 192), mode='bilinear')
-        c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
         with amp.autocast(enabled=args.use_amp):
+            cloth_mask_target = parse[:, 3:4]
+            cloth_target = ((img+1) * cloth_mask_target) - 1
+            agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='bilinear')
+            parse_cloth_gmm = F.interpolate(cloth_mask_target, size=(256, 192), mode='nearest')
+            pose_gmm = F.interpolate(pose, size=(256, 192), mode='bilinear')
+            c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
             gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
             theta, warped_grid = self.gmm(gmm_input, c_gmm)
             # second-order difference constraint
             rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(theta)
             warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
-            # warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
-            cloth_target = img*parse_cloth_gmm
-            gmm_loss = self.l1_loss(warped_c, cloth_target) + torch.mean(0.04*(rx_loss+ry_loss+cx_loss+cy_loss+rg_loss+cg_loss))
-        
+            warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
+            gmm_loss = self.l1_loss(warped_c, cloth_target) + self.l1_loss(warped_cm, cloth_mask_target) \
+                        + torch.mean(0.04*(rx_loss+ry_loss+cx_loss+cy_loss+rg_loss+cg_loss))
+
         self.scaler.scale(gmm_loss).backward()
         self.scaler.step(self.optimizer_gmm)
         self.optimizer_gmm.zero_grad(set_to_none=True)
-        im_log = {}
+        img_log = {}
         if get_img_log:
-            im_log['gmm_real'] = cloth_target.cpu().numpy()
-            im_log['gmm_pred'] = warped_c.cpu().numpy()
-        return gmm_loss.detach_(), 
+            img_log['gmm_real'] = (255*(cloth_target+1)/2).permute(0,2,3,1).cpu().numpy()
+            img_log['gmm_pred'] = (255*(warped_c.detach()+1)/2).permute(0,2,3,1).cpu().numpy()
+        return gmm_loss.detach_(), img_log
 
 
     def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm):
@@ -156,6 +159,7 @@ class TrainModel:
         if args.distributed: self.train_loader.train_sampler.set_epoch(epoch)
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
+        gmm_losses = AverageMeter()
         tsteps = len(self.train_loader.data_loader)
         with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
             for step, batch in enumerate(pbar):
@@ -163,22 +167,22 @@ class TrainModel:
                 img = batch['img']
                 img_agnostic = batch['img_agnostic']
                 parse_target_down = batch['parse_target_down']
-                parse_agnostic = batch['parse_agnostic']
+                # parse_agnostic = batch['parse_agnostic']
                 pose = batch['pose']
                 cloth = batch['cloth']
                 cloth_mask = batch['cloth_mask']
 
-                seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
-                                                            parse_agnostic, pose, cloth, cloth_mask,
-                                                            get_img_log=step==(tsteps-1))
+                # seg_lossG, seg_lossD, seg_im_log = self.segmentation_train_step(args, parse_target_down,
+                #                                             parse_agnostic, pose, cloth, cloth_mask,
+                #                                             get_img_log=step==(tsteps-1))
 
-                segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
-                segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
+                # segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
+                # segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
 
                 # convert 13 channel body parse to 7 channel parse.
                 parse_target = self.gauss(self.up(parse_target_down))
                 parse_target = parse_target.argmax(dim=1, keepdim=True)
-                parse_orig = parse_target.copy()
+                parse_orig = parse_target.clone()
                 for k,v in self.parse_labels.items():
                     for l in v[1]:
                         if l!=k:
@@ -186,19 +190,23 @@ class TrainModel:
 
                 parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
                 parse.scatter_(1, parse_target, 1.0)
-
-                gmm_lossG, gmm_lossD, gmm_im_log = self.gmm_train_step(self, args, img, img_agnostic, parse,
+                gmm_loss, gmm_im_log = self.gmm_train_step(args, img, img_agnostic, parse,
                                                             pose, cloth, cloth_mask,
                                                             get_img_log=step==(tsteps-1))
+                gmm_losses.update(gmm_loss.detach_(), cloth.size(0))
 
 
                 if args.local_rank == 0:
                     if not step % args.log_interval:
-                        info = {'SegG Loss': float(segG_losses.avg), 'SegD Loss': float(segD_losses.avg)}
+                        info = {
+                            # 'SegG Loss': float(segG_losses.avg),
+                            # 'SegD Loss': float(segD_losses.avg),
+                            'GMM Loss': float(gmm_losses.avg),
+                            }
                         if args.use_wandb: wandb.log(info)
                         pbar.set_postfix(info)
                 self.scaler.update()
-        return seg_im_log
+        return gmm_im_log
     
     def train_loop(self, args, init_epoch=0):
         for epoch in range(init_epoch, args.epochs):

@@ -378,34 +378,26 @@ class TpsGridGen(nn.Module):
         # Create a grid in numpy.
         # TODO: set an appropriate interval ([-1, 1] in CP-VTON, [-0.9, 0.9] in the current version of VITON-HD)
         grid_X, grid_Y = np.meshgrid(np.linspace(-0.9, 0.9, args.load_width), np.linspace(-0.9, 0.9, args.load_height))
-        grid_X = torch.tensor(grid_X, dtype=dtype).unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
-        grid_Y = torch.tensor(grid_Y, dtype=dtype).unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
+        self.grid_X = torch.tensor(grid_X, dtype=dtype, device='cuda').unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
+        self.grid_Y = torch.tensor(grid_Y, dtype=dtype, device='cuda').unsqueeze(0).unsqueeze(3)  # size: (1, h, w, 1)
 
         # Initialize the regular grid for control points P.
         self.N = args.grid_size * args.grid_size
         coords = np.linspace(-0.9, 0.9, args.grid_size)
         # FIXME: why P_Y and P_X are swapped?
         P_Y, P_X = np.meshgrid(coords, coords)
-        P_X = torch.tensor(P_X, dtype=dtype).reshape(self.N, 1)
-        P_Y = torch.tensor(P_Y, dtype=dtype).reshape(self.N, 1)
-        P_X_base = P_X.clone()
-        P_Y_base = P_Y.clone()
+        P_X = torch.tensor(P_X, dtype=dtype, device='cuda').reshape(self.N, 1)
+        P_Y = torch.tensor(P_Y, dtype=dtype, device='cuda').reshape(self.N, 1)
+        self.P_X_base = P_X.clone()
+        self.P_Y_base = P_Y.clone()
 
-        Li = self.compute_L_inverse(P_X, P_Y).unsqueeze(0)
-        P_X = P_X.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0, 4)  # size: (1, 1, 1, 1, self.N)
-        P_Y = P_Y.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0, 4)  # size: (1, 1, 1, 1, self.N)
-
-        self.register_buffer('grid_X', grid_X, False)
-        self.register_buffer('grid_Y', grid_Y, False)
-        self.register_buffer('P_X_base', P_X_base, False)
-        self.register_buffer('P_Y_base', P_Y_base, False)
-        self.register_buffer('Li', Li, False)
-        self.register_buffer('P_X', P_X, False)
-        self.register_buffer('P_Y', P_Y, False)
+        self.Li = self.compute_L_inverse(P_X, P_Y).unsqueeze(0)
+        self.P_X = P_X.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0, 4)  # size: (1, 1, 1, 1, self.N)
+        self.P_Y = P_Y.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0, 4)  # size: (1, 1, 1, 1, self.N)
 
     # TODO: refactor
     def compute_L_inverse(self,X,Y):
-        N = X.size()[0] # num of points (along dim 0)
+        N = X.size(0) # num of points (along dim 0)
         # construct matrix K
         Xmat = X.expand(N,N)
         Ymat = Y.expand(N,N)
@@ -413,10 +405,10 @@ class TpsGridGen(nn.Module):
         P_dist_squared[P_dist_squared==0]=1 # make diagonal 1 to avoid NaN in log computation
         K = torch.mul(P_dist_squared,torch.log(P_dist_squared))
         # construct matrix L
-        O = torch.FloatTensor(N,1).fill_(1)
-        Z = torch.FloatTensor(3,3).fill_(0)
+        O = torch.ones(N,1, device='cuda')
+        Z = torch.zeros(3,3, device='cuda')
         P = torch.cat((O,X,Y),1)
-        L = torch.cat((torch.cat((K,P),1),torch.cat((P.transpose(0,1),Z),1)),0)
+        L = torch.cat((torch.cat((K,P),1), torch.cat((P.transpose(0,1),Z),1)),0)
         Li = torch.inverse(L)
         return Li
 
