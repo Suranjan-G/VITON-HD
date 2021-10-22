@@ -74,8 +74,8 @@ class TrainModel:
         self.train_dataset = VITONDataset(args)
         self.train_loader = VITONDataLoader(args, self.train_dataset)
 
-        if args.local_rank==0 and args.use_wandb:
-            wandb.watch([self.segG, self.segD], log=None)
+        # if args.local_rank==0 and args.use_wandb:
+        #     wandb.watch([self.segG, self.segD], log=None)
     
     def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_img_log=False):
         with amp.autocast(enabled=args.use_amp):
@@ -140,8 +140,8 @@ class TrainModel:
         self.optimizer_gmm.zero_grad(set_to_none=True)
         img_log = {}
         if get_img_log:
-            img_log['gmm_real'] = (255*(cloth_target+1)/2).permute(0,2,3,1).cpu().numpy()
-            img_log['gmm_pred'] = (255*(warped_c.detach()+1)/2).permute(0,2,3,1).cpu().numpy()
+            img_log['gmm_real'] = (255*(cloth_target+1)/2).type(torch.uint8).permute(0,2,3,1).cpu().numpy()
+            img_log['gmm_pred'] = (255*(warped_c.detach()+1)/2).type(torch.uint8).permute(0,2,3,1).cpu().numpy()
         return gmm_loss.detach_(), img_log
 
 
@@ -220,8 +220,8 @@ class TrainModel:
                         for img in seg_im_log[k]:
                             im_dict[k].append(wandb.Image(img))
                     wandb.log(im_dict)
-                if not epoch%10:
-                    self.save_models(args)
+                # if not epoch%10:
+                #     self.save_models(args)
     
     def save_models(self, args):
         synchronize()
