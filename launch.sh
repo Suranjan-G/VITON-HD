@@ -1,7 +1,7 @@
 python3 train.py \
     --use_amp \
     --epochs 100 \
-    --batch_size 24 \
+    --batch_size 16 \
     --project VITON-HD \
     --shuffle \
     --load_height 1024 \

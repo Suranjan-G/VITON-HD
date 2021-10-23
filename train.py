@@ -254,6 +254,7 @@ def main():
     try:
         tm = TrainModel(args)
         tm.train_loop(args)
+        tm.save_models(args)
     except KeyboardInterrupt:
         print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
     finally:

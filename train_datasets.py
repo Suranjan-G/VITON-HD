@@ -4,6 +4,7 @@ from os import path as osp
 import random
 import numpy as np
 from PIL import Image, ImageDraw
+import accimage
 
 import torch
 from torch import nn
@@ -13,6 +14,20 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 import torchvision.transforms.functional as TF
 
+np.seterr(divide='ignore', invalid='ignore')
+
+def image_to_np(img):
+    image_np = np.empty([img.channels, img.height, img.width], dtype=np.uint8)
+    img.copyto(image_np)
+    return np.transpose(image_np, (1, 2, 0))
+
+def accimage_loader(path):
+    try:
+        im = accimage.Image(path)
+        imarr = image_to_np(im)
+        return Image.fromarray(imarr)
+    except IOError:
+        return Image.open(path)
 
 class VITONDataset(data.Dataset):
     def __init__(self, args):
@@ -128,13 +143,13 @@ class VITONDataset(data.Dataset):
 
     def __getitem__(self, index):
         img_name = self.img_names[index]
-        cloth = Image.open(osp.join(self.data_path, 'cloth', img_name)).convert('RGB')
+        cloth = accimage_loader(osp.join(self.data_path, 'cloth', img_name)).convert('RGB')
         cloth = TF.resize(cloth, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
         cloth = self.transform(cloth)  # [-1,1]
 
         ext = img_name.split('.')[-1]
         cmask_name = img_name.replace(f'.{ext}', '.png')
-        cloth_mask = Image.open(osp.join(self.data_path, 'cloth-mask', cmask_name)).convert('L')
+        cloth_mask = accimage_loader(osp.join(self.data_path, 'cloth-mask', cmask_name)).convert('L')
         cloth_mask = TF.resize(cloth_mask, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
         cloth_mask = np.array(cloth_mask)
         cloth_mask = (cloth_mask >= 128).astype(np.float32)
@@ -143,7 +158,7 @@ class VITONDataset(data.Dataset):
 
         # load pose image
         pose_name = img_name.replace(f'.{ext}', '_rendered.png')
-        pose_rgb = Image.open(osp.join(self.data_path, 'openpose-img', pose_name))
+        pose_rgb = accimage_loader(osp.join(self.data_path, 'openpose-img', pose_name))
         pose_rgb = TF.resize(pose_rgb, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
         pose_rgb = self.transform(pose_rgb)  # [-1,1]
 
@@ -156,7 +171,7 @@ class VITONDataset(data.Dataset):
 
         # load parsing image
         parse_name = img_name.replace(f'.{ext}', '.png')
-        parse = Image.open(osp.join(self.data_path, 'image-parse', parse_name))
+        parse = accimage_loader(osp.join(self.data_path, 'image-parse', parse_name))
         parse = np.array(parse)
         parse_orig = parse.copy()
         for k,v in self.labels.items():
@@ -179,7 +194,7 @@ class VITONDataset(data.Dataset):
         parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
 
         # load person image
-        img = Image.open(osp.join(self.data_path, 'image', img_name))
+        img = accimage_loader(osp.join(self.data_path, 'image', img_name))
         img = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(img)
         img_agnostic = self.get_img_agnostic(img, parse, pose_data)
         img = self.transform(img)
