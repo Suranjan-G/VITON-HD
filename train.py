@@ -157,6 +157,7 @@ class TrainModel:
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
         gmm_losses = AverageMeter()
+        img_log = {}
         tsteps = len(self.train_loader.data_loader)
         with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
             for step, batch in enumerate(pbar):
@@ -181,7 +182,7 @@ class TrainModel:
 
                 seg_lossG, seg_lossD, seg_img_log = self.segmentation_train_step(args, parse_target_down,
                                                             parse_agnostic, pose, cloth, cloth_mask,
-                                                            get_img_log=step==(tsteps-1))
+                                                            get_img_log=step==(tsteps-2))
 
                 segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
                 segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
@@ -199,7 +200,7 @@ class TrainModel:
                 parse.scatter_(1, parse_target, 1.0)
                 gmm_loss, gmm_img_log = self.gmm_train_step(args, img, img_agnostic, parse,
                                                             pose, cloth, cloth_mask,
-                                                            get_img_log=step==(tsteps-1))
+                                                            get_img_log=step==(tsteps-2))
                 gmm_losses.update(gmm_loss.detach_(), cloth.size(0))
 
 
@@ -213,8 +214,9 @@ class TrainModel:
                         if args.use_wandb: wandb.log(info)
                         pbar.set_postfix(info)
                 self.scaler.update()
-                seg_img_log.update(gmm_img_log)
-        return seg_img_log
+                img_log.update(seg_img_log)
+                img_log.update(gmm_img_log)
+        return img_log
     
     def train_loop(self, args, init_epoch=0):
         for epoch in range(init_epoch, args.epochs):
