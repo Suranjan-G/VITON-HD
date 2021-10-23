@@ -163,12 +163,21 @@ class TrainModel:
                 batch = self.train_loader.device_augment(batch, self.device, self.memory_format)
                 img = batch['img']
                 img_agnostic = batch['img_agnostic']
-                parse_target_down = batch['parse_target_down']
-                parse_agnostic = batch['parse_agnostic']
+                parse_target_down_idx = batch['parse_target_down']
+                parse_agnostic_idx = batch['parse_agnostic']
                 pose = batch['pose']
                 cloth = batch['cloth']
                 cloth_mask = batch['cloth_mask']
                 cloth = ((cloth+1) * cloth_mask) - 1
+                parse_target_down_idx[parse_target_down_idx==13] = 0
+                parse_target_down = torch.empty(parse_target_down_idx.size(0), args.semantic_nc, 256, 192, 
+                                                    dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
+                parse_target_down.scatter_(1, parse_target_down_idx.long(), 1.0)
+                parse_agnostic_idx[parse_agnostic_idx==13] = 0
+                parse_agnostic = torch.empty(parse_agnostic_idx.size(0), args.semantic_nc, args.load_height, args.load_width, 
+                                                    dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
+                parse_agnostic.scatter_(1, parse_agnostic_idx.long(), 1.0)
+                del parse_target_down_idx, parse_agnostic_idx
 
                 seg_lossG, seg_lossD, seg_img_log = self.segmentation_train_step(args, parse_target_down,
                                                             parse_agnostic, pose, cloth, cloth_mask,
