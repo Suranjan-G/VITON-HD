@@ -170,11 +170,9 @@ class TrainModel:
                 cloth = batch['cloth']
                 cloth_mask = batch['cloth_mask']
                 cloth = ((cloth+1) * cloth_mask) - 1
-                parse_target_down_idx[parse_target_down_idx==13] = 0
                 parse_target_down = torch.empty(parse_target_down_idx.size(0), args.semantic_nc, 256, 192, 
                                                     dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
                 parse_target_down.scatter_(1, parse_target_down_idx.long(), 1.0)
-                parse_agnostic_idx[parse_agnostic_idx==13] = 0
                 parse_agnostic = torch.empty(parse_agnostic_idx.size(0), args.semantic_nc, args.load_height, args.load_width, 
                                                     dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
                 parse_agnostic.scatter_(1, parse_agnostic_idx.long(), 1.0)
@@ -195,6 +193,7 @@ class TrainModel:
                     for l in v[1]:
                         if l!=k:
                             parse_target[parse_orig==l] = k
+                del parse_orig
 
                 parse = torch.zeros(parse_target.size(0), 7, args.load_height, args.load_width, dtype=torch.float32, device=self.device)
                 parse.scatter_(1, parse_target, 1.0)
