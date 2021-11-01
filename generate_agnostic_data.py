@@ -172,7 +172,7 @@ class AgnosticGen:
 
     def __len__(self):
         return len(self.img_names)
-    
+
     def generate(self):
         for i in tqdm(self):
             pass

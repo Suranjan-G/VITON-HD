@@ -169,7 +169,7 @@ class TrainModel:
                 pose = batch['pose']
                 cloth = batch['cloth']
                 cloth_mask = batch['cloth_mask']
-                cloth = ((cloth+1) * cloth_mask) - 1
+                cloth = ((cloth+1) * cloth_mask) - 1    # mask out the cloth
                 parse_target_down = torch.empty(parse_target_down_idx.size(0), args.semantic_nc, 256, 192, 
                                                     dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
                 parse_target_down.scatter_(1, parse_target_down_idx.long(), 1.0)
@@ -217,8 +217,8 @@ class TrainModel:
                 img_log.update(gmm_img_log)
         return img_log
     
-    def train_loop(self, args, init_epoch=0):
-        for epoch in range(init_epoch, args.epochs):
+    def train_loop(self, args, init_epoch=1):
+        for epoch in range(init_epoch, args.epochs+1):
             seg_img_log = self.train_epoch(args, epoch)
             if args.local_rank == 0:
                 if args.use_wandb:
@@ -254,7 +254,7 @@ class TrainModel:
             self.optimizer_gmm.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location))
             print("[*] Weights loaded.")
         except FileNotFoundError as e:
-                print(f"[!] {e}, skipping weights loading.")
+            print(f"[!] {e}, skipping weights loading.")
 
 
 def main():
@@ -266,7 +266,7 @@ def main():
         tm.train_loop(args)
         tm.save_models(args)
     except KeyboardInterrupt:
-        print("[!] Keyboard Interrupt! Cleaning up and shutting down.")
+        print("[!] Keyboard Interrupt! Cleaning up, saving and shutting down.")
     finally:
         cleanup(args.distributed)
 

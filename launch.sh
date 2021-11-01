@@ -1,6 +1,6 @@
 python3 train.py \
     --use_amp \
-    --epochs 101 \
+    --epochs 100 \
     --batch_size 24 \
     --project VITON-HD \
     --shuffle \
@@ -8,5 +8,5 @@ python3 train.py \
     --load_width 768 \
     --use_wandb \
     --log_interval 20 \
-    --workers 4 \
+    --workers 6 \
     --dataset_dir /home/azureuser/data/docker_data
