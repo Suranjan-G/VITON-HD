@@ -9,5 +9,4 @@ python3 train.py \
     --use_wandb \
     --log_interval 20 \
     --workers 4 \
-    --memory_format channels_first \
     --dataset_dir /home/azureuser/data/docker_data

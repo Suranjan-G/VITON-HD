@@ -17,15 +17,15 @@ class AgnosticGen:
         self.data_path = osp.join(args.dataset_dir, args.dataset_mode)
 
         parse_down_dir = osp.join(self.data_path, 'parse-down')
-        if not os.path.exists(parse_down_dir):
+        if not osp.exists(parse_down_dir):
             os.makedirs(parse_down_dir)
         
         parse_agn_dir = osp.join(self.data_path, 'parse-agnostic')
-        if not os.path.exists(parse_agn_dir):
+        if not osp.exists(parse_agn_dir):
             os.makedirs(parse_agn_dir)
         
         image_agn_dir = osp.join(self.data_path, 'image-agnostic')
-        if not os.path.exists(image_agn_dir):
+        if not osp.exists(image_agn_dir):
             os.makedirs(image_agn_dir)
 
         # load data list
@@ -148,21 +148,27 @@ class AgnosticGen:
                     parse[parse_orig==l] = k
         del parse_orig
 
-        parse_down = cv2.resize(parse, (192, 256), interpolation=cv2.INTER_NEAREST)
-        parse_down[parse_down==13] = 0
-        cv2.imwrite(osp.join(self.data_path, 'parse-down', parse_name), parse_down)
+        parse_down_file = osp.join(self.data_path, 'parse-down', parse_name)
+        if not osp.exists(parse_down_file):
+            parse_down = cv2.resize(parse, (192, 256), interpolation=cv2.INTER_NEAREST)
+            parse_down[parse_down==13] = 0
+            cv2.imwrite(parse_down_file, parse_down)
 
         parse = cv2.resize(parse, (self.load_width, self.load_height), interpolation=cv2.INTER_NEAREST)
-        parse_agnostic = self.get_parse_agnostic(parse, pose_data)
-        parse_agnostic = np.array(parse_agnostic, dtype=np.uint8)
-        parse_agnostic[parse_agnostic==13] = 0
-        cv2.imwrite(osp.join(self.data_path, 'parse-agnostic', parse_name), parse_agnostic)
+        parse_agnostic_file = osp.join(self.data_path, 'parse-agnostic', parse_name)
+        if not osp.exists(parse_agnostic_file):
+            parse_agnostic = self.get_parse_agnostic(parse, pose_data)
+            parse_agnostic = np.array(parse_agnostic, dtype=np.uint8)
+            parse_agnostic[parse_agnostic==13] = 0
+            cv2.imwrite(parse_agnostic_file, parse_agnostic)
 
         # load person image
-        img = Image.open(osp.join(self.data_path, 'image', img_name))
-        img = img.resize((self.load_width, self.load_height), Image.BILINEAR)
-        img_agnostic = self.get_img_agnostic(img, parse, pose_data)
-        img_agnostic.save(osp.join(self.data_path, 'image-agnostic', img_name))
+        img_agnostic_file = osp.join(self.data_path, 'image-agnostic', img_name)
+        if not osp.exists(img_agnostic_file):
+            img = Image.open(osp.join(self.data_path, 'image', img_name))
+            img = img.resize((self.load_width, self.load_height), Image.BILINEAR)
+            img_agnostic = self.get_img_agnostic(img, parse, pose_data)
+            img_agnostic.save(img_agnostic_file)
 
     def __len__(self):
         return len(self.img_names)

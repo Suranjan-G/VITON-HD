@@ -22,27 +22,8 @@ class VITONDataset(data.Dataset):
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
-
         # load data list
         self.img_names = os.listdir(osp.join(self.data_path, 'image'))
-
-        self.labels = {
-                # 0: ['background', [0, 10]],
-                0: ['background', [0]],
-                1: ['hair', [1, 2]],
-                2: ['left_shoe', [18]],
-                3: ['noise', [3, 11]],
-                4: ['face', [4, 13]],
-                5: ['left_arm', [14]],
-                6: ['right_arm', [15]],
-                7: ['upper', [5, 6, 7]],
-                8: ['socks', [8]],
-                9: ['bottom', [9, 12]],
-                10: ['right_shoe', [19]],
-                11: ['left_leg', [16]],
-                12: ['right_leg', [17]],
-                13: ['neck', [10]],
-            }
 
     def __getitem__(self, index):
         img_name = self.img_names[index]
@@ -67,8 +48,10 @@ class VITONDataset(data.Dataset):
         # load parsing image
         parse_name = img_name.replace(f'.{ext}', '.png')
         parse_down = Image.open(osp.join(self.data_path, 'parse-down', parse_name))
+        parse_down = torch.from_numpy(np.array(parse_down)[None]).type(torch.uint8)
 
         parse_agnostic = Image.open(osp.join(self.data_path, 'parse-agnostic', parse_name))
+        parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).type(torch.uint8)
 
         # load person image
         img = Image.open(osp.join(self.data_path, 'image', img_name))
