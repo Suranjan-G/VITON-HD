@@ -16,6 +16,8 @@ def get_args():
 
     parser.add_argument('--use_wandb', action='store_true', help="Use wandb logger.")
     parser.add_argument('--project', type=str, default='VITON-HD', help="Name of wandb project.")
+    parser.add_argument('--resume', type=str, default=None, help="ID of wandb run to resume.")
+    parser.add_argument('--init_epoch', type=int, default=1, metavar="N", help="Initial epoch.")
     parser.add_argument('--log_interval', type=int, default=20, metavar="N", help="Log per N steps.")
     parser.add_argument('--seed', type=int, default=3407, metavar="N", help="Random seed.")
     parser.add_argument('--shuffle', action='store_true', help="Shuffle the dataset.")
@@ -46,9 +48,12 @@ def get_args():
         args.local_rank = int(os.environ["LOCAL_RANK"])
     except KeyError:
         args.local_rank = 0
-    if args.use_wandb:
-        if args.local_rank == 0:
+    if args.use_wandb and args.local_rank == 0:
+        if args.resume:
+            run = wandb.init(id=args.resume, project=args.project, resume='must')
+            wandb.config.update(dict(init_epoch=run.summary['epoch']+1, resume=args.resume), allow_val_change=True)
+        else:
             run = wandb.init(project=args.project)
             wandb.config.update(args)
-            args = wandb.config
+        args = wandb.config
     return args

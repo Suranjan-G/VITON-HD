@@ -153,7 +153,7 @@ class GANLoss(nn.Module):
         if use_lsgan:
             self.loss = nn.MSELoss()
         else:
-            self.loss = nn.BCELoss()
+            self.loss = nn.BCEWithLogitsLoss()
 
     def __call__(self, inp, target_is_real):
         if isinstance(inp[0], list):

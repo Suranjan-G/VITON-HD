@@ -31,6 +31,18 @@ class TrainModel:
         # alias = ALIASGenerator(args, input_nc=9).train().to(self.device, memory_format=self.memory_format)
         # args.semantic_nc = 13
 
+        if args.distributed:
+            dist.init_process_group(backend="nccl")
+            if args.sync_bn:
+                self.segG = nn.SyncBatchNorm.convert_sync_batchnorm(self.segG)
+                self.segD = nn.SyncBatchNorm.convert_sync_batchnorm(self.segD)
+                self.gmm = nn.SyncBatchNorm.convert_sync_batchnorm(self.gmm)
+                # self.alias = nn.SyncBatchNorm.convert_sync_batchnorm(self.alias)
+            self.segG = DDP(self.segG, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            self.segD = DDP(self.segD, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            self.gmm = DDP(self.gmm, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            # self.alias = DDP(self.alias, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+
         self.gauss = tgm.image.GaussianBlur((7, 7), (3, 3)).to(self.device)
         self.up = nn.Upsample(size=(args.load_height, args.load_width), mode='bilinear')
 
@@ -55,18 +67,6 @@ class TrainModel:
                 5:  ['left_arm',    [5]],
                 6:  ['right_arm',   [6]],
             }
-        self.load_models(args)
-        if args.distributed:
-            dist.init_process_group(backend="nccl")
-            if args.sync_bn:
-                self.segG = nn.SyncBatchNorm.convert_sync_batchnorm(self.segG)
-                self.segD = nn.SyncBatchNorm.convert_sync_batchnorm(self.segD)
-                self.gmm = nn.SyncBatchNorm.convert_sync_batchnorm(self.gmm)
-                # self.alias = nn.SyncBatchNorm.convert_sync_batchnorm(self.alias)
-            self.segG = DDP(self.segG, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
-            self.segD = DDP(self.segD, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
-            self.gmm = DDP(self.gmm, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
-            # self.alias = DDP(self.alias, device_ids=[args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
 
         self.train_dataset = VITONDataset(args)
         self.train_loader = VITONDataLoader(args, self.train_dataset)
@@ -217,30 +217,29 @@ class TrainModel:
                 img_log.update(gmm_img_log)
         return img_log
     
-    def train_loop(self, args, init_epoch=1):
-        for epoch in range(init_epoch, args.epochs+1):
-            seg_img_log = self.train_epoch(args, epoch)
+    def train_loop(self, args):
+        for epoch in range(args.init_epoch, args.epochs+1):
+            img_log = self.train_epoch(args, epoch)
             if args.local_rank == 0:
                 if args.use_wandb:
                     wandb.log({'epoch': epoch})
                     im_dict = {}
-                    for k in seg_img_log:
+                    for k in img_log:
                         im_dict[k] = []
-                        for img in seg_img_log[k]:
+                        for img in img_log[k]:
                             im_dict[k].append(wandb.Image(img))
                     wandb.log(im_dict)
                 if not epoch%5:
                     self.save_models(args)
     
     def save_models(self, args):
-        synchronize()
         if args.local_rank == 0:
             torch.save(self.segG.state_dict(), os.path.join(args.checkpoint_dir, "segG.pth"))
             torch.save(self.segD.state_dict(), os.path.join(args.checkpoint_dir, "segD.pth"))
             torch.save(self.gmm.state_dict(), os.path.join(args.checkpoint_dir, "gmm.pth"))
             torch.save(self.optimizer_seg.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_seg.pth"))
             torch.save(self.optimizer_gmm.state_dict(), os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"))
-            print("[*] Weights saved.")
+            print("[+] Weights saved.")
             
 
     def load_models(self, args):
@@ -252,17 +251,19 @@ class TrainModel:
             self.gmm.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "gmm.pth"), map_location=map_location))
             self.optimizer_seg.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location))
             self.optimizer_gmm.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location))
-            print("[*] Weights loaded.")
+            if args.local_rank == 0: print("[+] Weights loaded.")
         except FileNotFoundError as e:
-            print(f"[!] {e}, skipping weights loading.")
+            if args.local_rank == 0: print(f"[!] {e}, skipping weights loading.")
 
 
 def main():
     args = get_args()
-    print(args)
+    if args.local_rank == 0: print(args)
+    torch.cuda.set_device(args.local_rank)
     seed_everything(args.seed)
     try:
         tm = TrainModel(args)
+        tm.load_models(args)
         tm.train_loop(args)
         tm.save_models(args)
     except KeyboardInterrupt:
