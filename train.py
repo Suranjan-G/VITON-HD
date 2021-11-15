@@ -9,13 +9,14 @@ from torch import nn
 from torch.nn import functional as F
 from torch.cuda import amp
 import torch.optim as optim
+from torch import autograd
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from train_datasets import VITONDataset, VITONDataLoader
 from networks import SegGenerator, GMM, BoundedGridLocNet, ALIASGenerator, MultiscaleDiscriminator, GANLoss
-from utils import cleanup, gen_noise, seed_everything, load_checkpoint, synchronize, AverageMeter
+from utils import cleanup, gen_noise, seed_everything, set_grads, synchronize, AverageMeter
 from train_options import get_args
 
 
@@ -96,12 +97,12 @@ class TrainModel:
             seg_lossD = (self.criterion_gan(real_out, True)     # Treat real as real
                         + self.criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.
 
-        self.segD.requires_grad_(False)
-        self.scaler.scale(seg_lossG).backward(retain_graph=True)
-        self.segD.requires_grad_(True)
-        self.segG.requires_grad_(False)
-        self.scaler.scale(seg_lossD).backward()
-        self.segG.requires_grad_(True)
+        gradsD = autograd.grad(self.scaler.scale(seg_lossD), self.segD.parameters(), retain_graph=True)
+        gradsG = autograd.grad(self.scaler.scale(seg_lossG), self.segG.parameters())
+
+        set_grads(gradsD, self.segD.parameters())
+        set_grads(gradsG, self.segG.parameters())
+        del gradsG, gradsD
 
         self.scaler.step(self.optimizer_seg)
         self.optimizer_seg.zero_grad(set_to_none=True)

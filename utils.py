@@ -13,10 +13,9 @@ class AverageMeter:
         self.reset()
 
     def reset(self):
-        self.val = self.sum = self.count = self.avg = 0
+        self.sum = self.count = self.avg = 0
 
     def update(self, val, n=1):
-        self.val = val
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
@@ -55,6 +54,9 @@ def get_world_size():
 
     return dist.get_world_size()
 
+def set_grads(grads, params):
+    for g,p in zip(grads, params):
+        p.grad = g
 
 def gen_noise(shape, device='cuda'):
     return torch.randn(shape, dtype=torch.float32, device=device)
@@ -76,9 +78,3 @@ def save_images(img_tensors, img_names, save_dir):
 
         im = Image.fromarray(array)
         im.save(os.path.join(save_dir, img_name), format='JPEG')
-
-
-def load_checkpoint(model, checkpoint_path):
-    if not os.path.exists(checkpoint_path):
-        raise ValueError("'{}' is not a valid checkpoint path".format(checkpoint_path))
-    model.load_state_dict(torch.load(checkpoint_path))
