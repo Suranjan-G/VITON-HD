@@ -169,8 +169,7 @@ class TrainModel:
             parse_div = torch.cat((parse, misalign_mask), dim=1)
             parse_div[:, 3:4] -= misalign_mask
 
-            output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1),
-                                parse, parse_div, misalign_mask)
+            output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
             return
 
     def train_epoch(self, args, epoch):
@@ -206,10 +205,8 @@ class TrainModel:
                                                                                  parse_agnostic, pose, cloth, cloth_mask,
                                                                                  get_img_log=step == (tsteps-2))
 
-                segG_losses.update(seg_lossG.detach_(),
-                                   parse_target_down.size(0))
-                segD_losses.update(seg_lossD.detach_(),
-                                   parse_target_down.size(0))
+                segG_losses.update(seg_lossG.detach_(), parse_target_down.size(0))
+                segD_losses.update(seg_lossD.detach_(), parse_target_down.size(0))
 
                 # convert 13 channel body parse to 7 channel parse.
                 parse_target = self.gauss(self.up(parse_target_down))
