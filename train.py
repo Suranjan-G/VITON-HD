@@ -91,13 +91,10 @@ class TrainModel:
     def segmentation_train_step(self, args, parse_target_down, parse_agnostic, pose, cloth, cloth_mask, get_img_log=False):
         with amp.autocast(enabled=args.use_amp):
             # Part 1. Segmentation generation
-            parse_agnostic_down = F.interpolate(
-                parse_agnostic, size=(256, 192), mode='bilinear')
+            parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
             pose_down = F.interpolate(pose, size=(256, 192), mode='bilinear')
-            c_masked_down = F.interpolate(
-                cloth * cloth_mask, size=(256, 192), mode='bilinear')
-            cm_down = F.interpolate(
-                cloth_mask, size=(256, 192), mode='bilinear')
+            c_masked_down = F.interpolate(cloth * cloth_mask, size=(256, 192), mode='bilinear')
+            cm_down = F.interpolate(cloth_mask, size=(256, 192), mode='bilinear')
             seg_input = torch.cat((cm_down, c_masked_down, parse_agnostic_down, pose_down, gen_noise(
                 cm_down.size(), device=self.device)), dim=1)
 
@@ -109,19 +106,15 @@ class TrainModel:
                 self.ce_loss(parse_pred_down, parse_target_mx)
 
             parse_pred_down = F.softmax(parse_pred_down, dim=1)
-            fake_out = self.segD(
-                torch.cat((seg_input, parse_pred_down), dim=1))
-            real_out = self.segD(
-                torch.cat((seg_input, parse_target_down.detach()), dim=1))
+            fake_out = self.segD(torch.cat((seg_input, parse_pred_down), dim=1))
+            real_out = self.segD(torch.cat((seg_input, parse_target_down.detach()), dim=1))
             # Treat fake images as real to train the Generator.
             seg_lossG += self.criterion_gan(fake_out, True)
             seg_lossD = (self.criterion_gan(real_out, True)     # Treat real as real
                          + self.criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.
 
-        gradsD = autograd.grad(self.scaler.scale(
-            seg_lossD), self.segD.parameters(), retain_graph=True)
-        gradsG = autograd.grad(self.scaler.scale(
-            seg_lossG), self.segG.parameters())
+        gradsD = autograd.grad(self.scaler.scale(seg_lossD), self.segD.parameters(), retain_graph=True)
+        gradsG = autograd.grad(self.scaler.scale(seg_lossG), self.segG.parameters())
 
         set_grads(gradsD, self.segD.parameters())
         set_grads(gradsG, self.segG.parameters())
@@ -144,24 +137,18 @@ class TrainModel:
         with amp.autocast(enabled=args.use_amp):
             cloth_mask_target = parse[:, 3:4]
             cloth_target = ((img+1) * cloth_mask_target) - 1
-            agnostic_gmm = F.interpolate(
-                img_agnostic, size=(256, 192), mode='bilinear')
-            parse_cloth_gmm = F.interpolate(
-                cloth_mask_target, size=(256, 192), mode='nearest')
+            agnostic_gmm = F.interpolate(img_agnostic, size=(256, 192), mode='bilinear')
+            parse_cloth_gmm = F.interpolate(cloth_mask_target, size=(256, 192), mode='nearest')
             pose_gmm = F.interpolate(pose, size=(256, 192), mode='bilinear')
             c_gmm = F.interpolate(cloth, size=(256, 192), mode='bilinear')
-            gmm_input = torch.cat(
-                (parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
+            gmm_input = torch.cat((parse_cloth_gmm, pose_gmm, agnostic_gmm), dim=1)
             theta, warped_grid = self.gmm(gmm_input, c_gmm)
             # second-order difference constraint
-            rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(
-                theta)
+            rx_loss, ry_loss, cx_loss, cy_loss, rg_loss, cg_loss = self.loc_net(theta)
             warped_c = F.grid_sample(cloth, warped_grid, padding_mode='border')
-            warped_cm = F.grid_sample(
-                cloth_mask, warped_grid, padding_mode='border')
+            warped_cm = F.grid_sample(cloth_mask, warped_grid, padding_mode='border')
             gmm_loss = self.l1_loss(warped_c, cloth_target) + self.l1_loss(warped_cm, cloth_mask_target) \
-                + torch.mean(0.04*(rx_loss+ry_loss+cx_loss +
-                             cy_loss+rg_loss+cg_loss))
+                     + torch.mean(0.04*(rx_loss+ry_loss+cx_loss+cy_loss+rg_loss+cg_loss))
 
         self.scaler.scale(gmm_loss).backward()
         self.scaler.step(self.optimizer_gmm)
