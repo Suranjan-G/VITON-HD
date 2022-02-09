@@ -1,13 +1,14 @@
 import os
 from os import path as osp
-import numpy as np
-from PIL import Image
 
+import cv2
+import numpy as np
 import torch
+import torchvision.transforms.functional as TF
+from PIL import Image
 from torch.utils import data
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
-import torchvision.transforms.functional as TF
 
 np.seterr(divide='ignore', invalid='ignore')
 
@@ -18,47 +19,54 @@ class VITONDataset(data.Dataset):
         self.load_width = args.load_width
         self.semantic_nc = args.semantic_nc
         self.data_path = osp.join(args.dataset_dir, args.dataset_mode)
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
         # load data list
         self.img_names = os.listdir(osp.join(self.data_path, 'image'))
 
     def __getitem__(self, index):
         img_name = self.img_names[index]
-        cloth = Image.open(osp.join(self.data_path, 'cloth', img_name)).convert('RGB')
-        cloth = TF.resize(cloth, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
-        cloth = self.transform(cloth)  # [-1,1]
+        cloth = cv2.imread(osp.join(self.data_path, 'cloth', img_name), cv2.IMREAD_COLOR)
+        cloth = cv2.cvtColor(cloth, cv2.COLOR_BGR2RGB)
+        cloth = cv2.resize(cloth, (self.load_width, self.load_height), interpolation=cv2.INTER_LINEAR)
+        cloth = torch.from_numpy(cloth)
+        cloth = (cloth / 127.5).sub_(1)     # [-1,1]
 
         ext = img_name.split('.')[-1]
         cmask_name = img_name.replace(f'.{ext}', '.png')
-        cloth_mask = Image.open(osp.join(self.data_path, 'cloth-mask', cmask_name)).convert('L')
-        cloth_mask = TF.resize(cloth_mask, (self.load_height, self.load_width), interpolation=InterpolationMode.NEAREST)
-        cloth_mask = np.array(cloth_mask, dtype=np.float32)/255.
-        cloth_mask = torch.from_numpy(cloth_mask)  # [0,1]
+
+        cloth_mask = cv2.imread(osp.join(self.data_path, 'cloth-mask', cmask_name), cv2.IMREAD_GRAYSCALE)
+        cloth_mask = cv2.resize(cloth_mask, (self.load_width, self.load_height), interpolation=cv2.INTER_NEAREST)
+        cloth_mask = torch.from_numpy(cloth_mask)
+        cloth_mask = (cloth_mask / 255.)    # [0,1]
         cloth_mask.unsqueeze_(0)
 
         # load pose image
         pose_name = img_name.replace(f'.{ext}', '_rendered.png')
-        pose_rgb = Image.open(osp.join(self.data_path, 'openpose-img', pose_name))
-        pose_rgb = TF.resize(pose_rgb, (self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)
-        pose_rgb = self.transform(pose_rgb)  # [-1,1]
+        pose_rgb = cv2.imread(osp.join(self.data_path, 'openpose-img', pose_name), cv2.IMREAD_COLOR)
+        pose_rgb = cv2.cvtColor(pose_rgb, cv2.COLOR_BGR2RGB)
+        pose_rgb = cv2.resize(pose_rgb, (self.load_width, self.load_height), interpolation=cv2.INTER_LINEAR)
+        pose_rgb = torch.from_numpy(pose_rgb)
+        pose_rgb = (pose_rgb / 127.5).sub_(1)   # [-1,1]
 
         # load parsing image
         parse_name = img_name.replace(f'.{ext}', '.png')
-        parse_down = Image.open(osp.join(self.data_path, 'parse-down', parse_name))
-        parse_down = torch.from_numpy(np.array(parse_down)[None]).type(torch.uint8)
+        parse_down = cv2.imread(osp.join(self.data_path, 'parse-down', parse_name), cv2.IMREAD_UNCHANGED)
+        parse_down = torch.from_numpy(parse_down[None]).to(torch.uint8)
 
-        parse_agnostic = Image.open(osp.join(self.data_path, 'parse-agnostic', parse_name))
-        parse_agnostic = torch.from_numpy(np.array(parse_agnostic)[None]).type(torch.uint8)
+        parse_agnostic = cv2.imread(osp.join(self.data_path, 'parse-agnostic', parse_name), cv2.IMREAD_UNCHANGED)
+        parse_agnostic = torch.from_numpy(parse_agnostic[None]).to(torch.uint8)
 
         # load person image
-        img = Image.open(osp.join(self.data_path, 'image', img_name))
-        img = transforms.Resize((self.load_height, self.load_width), interpolation=InterpolationMode.BILINEAR)(img)
-        img_agnostic = Image.open(osp.join(self.data_path, 'image-agnostic', img_name))
-        img = self.transform(img)
-        img_agnostic = self.transform(img_agnostic)  # [-1,1]
+        img = cv2.imread(osp.join(self.data_path, 'image', img_name), cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (self.load_width, self.load_height), interpolation=cv2.INTER_LINEAR)
+        img = torch.from_numpy(img)
+        img = (img / 127.5).sub_(1)     # [-1,1]
+
+        img_agnostic = cv2.imread(osp.join(self.data_path, 'image-agnostic', img_name), cv2.IMREAD_COLOR)
+        img_agnostic = cv2.cvtColor(img_agnostic, cv2.COLOR_BGR2RGB)
+        img_agnostic = cv2.resize(img_agnostic, (self.load_width, self.load_height), interpolation=cv2.INTER_LINEAR)
+        img_agnostic = torch.from_numpy(img_agnostic)
+        img_agnostic = (img_agnostic / 127.5).sub_(1)   # [-1,1]
 
         result = {
             'img': img,
