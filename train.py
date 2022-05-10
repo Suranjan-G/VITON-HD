@@ -21,6 +21,7 @@ from utils import (AverageMeter, cleanup, gen_noise, seed_everything,
 from vggloss import VGGLoss
 
 
+
 class TrainModel:
     def __init__(self, args):
         self.device = torch.device('cuda', args.local_rank)
@@ -52,15 +53,20 @@ class TrainModel:
                 self.segG = nn.SyncBatchNorm.convert_sync_batchnorm(self.segG)
                 self.segD = nn.SyncBatchNorm.convert_sync_batchnorm(self.segD)
                 self.gmm = nn.SyncBatchNorm.convert_sync_batchnorm(self.gmm)
-                self.alias = nn.SyncBatchNorm.convert_sync_batchnorm(
-                    self.alias)
+                self.aliasG = nn.SyncBatchNorm.convert_sync_batchnorm(self.aliasG)
+                self.aliasD = nn.SyncBatchNorm.convert_sync_batchnorm(self.aliasD)
+                self.criterionVGG = nn.SyncBatchNorm.convert_sync_batchnorm(self.criterionVGG)
             self.segG = DDP(self.segG, device_ids=[
                             args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
             self.segD = DDP(self.segD, device_ids=[
                             args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
             self.gmm = DDP(self.gmm, device_ids=[
                            args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
-            self.alias = DDP(self.alias, device_ids=[
+            self.aliasG = DDP(self.alias, device_ids=[
+                             args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            self.aliasD = DDP(self.alias, device_ids=[
+                             args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
+            self.criterionVGG = DDP(self.alias, device_ids=[
                              args.local_rank], output_device=args.local_rank, broadcast_buffers=False)
 
         self.gauss = tgm.image.GaussianBlur((7, 7), (3, 3)).to(self.device)
@@ -210,23 +216,19 @@ class TrainModel:
             
         gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
         gradsG = autograd.grad(self.scaler.scale(alias_lossG), self.aliasG.parameters())
-        
-        gradsVGG = autograd.grad(self.scaler.scale(VGG_loss), self.criterionVGG.parameters(), retain_graph=True)
 
         set_grads(gradsD, self.aliasD.parameters())
         set_grads(gradsG, self.aliasG.parameters())
-        set_grads(gradsVGG, self.criterionVGG.parameters())
-        del gradsG, gradsD, gradsVGG
+        del gradsG, gradsD
 
         self.scaler.step(self.optimizer_alias)
         self.optimizer_alias.zero_grad(set_to_none=True)
                                           
         img_log = {}
             if get_img_log:                
-                img_log['output'] = (
-                    255*(output).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
+                img_log['output'] = (255*(output)).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
             
-        return alias_lossG.detach_(), alias_lossD.detach_(), loss_G_GAN_Feat.detach_(), VGG_loss.detach_(), img_log, output
+        return alias_lossG.detach_(), alias_lossD.detach_(), loss_G_GAN_Feat.detach_(), img_log, output
 
     def train_epoch(self, args, epoch):
         if args.distributed:
@@ -286,14 +288,13 @@ class TrainModel:
                                                                                  get_img_log=step == (tsteps-2))
                 gmm_losses.update(gmm_loss.detach_(), cloth.size(0))
 
-                alias_lossG, alias_lossD, loss_G_GAN_Feat, VGG_loss, alias_img_log, output = self.alias_train_step(args, img, img_agnostic, parse, pose, warped_c, warped_cm,
+                alias_lossG, alias_lossD, loss_G_GAN_Feat, alias_img_log, output = self.alias_train_step(args, img, img_agnostic, parse, pose, warped_c, warped_cm,
                                                                                  get_img_log=step == (tsteps-2))
                 
                                           
                 aliasG_losses.update(alias_lossG.detach_(), img_agnostic.size(0))       
                 aliasD_losses.update(alias_lossD.detach_(), img_agnostic.size(0)) 
-                G_GAN_Feat_losses.update(loss_G_GAN_Feat.detach_(), img_agnostic.size(0)) 
-                VGG_losses.update(VGG_loss.detach_(), img_agnostic.size(0))                                        
+                G_GAN_Feat_losses.update(loss_G_GAN_Feat.detach_(), img_agnostic.size(0))                                         
 
                 if args.local_rank == 0:
                     if not step % args.log_interval:
@@ -304,7 +305,6 @@ class TrainModel:
                             'AliasG Loss': float(aliasG_losses.avg)
                             'AliasD Loss': float(aliasD_losses.avg)
                             'Feature Matching Loss': float(G_GAN_Feat_losses.avg)
-                            'VGG Loss': float(VGG_losses.avg)
                         }
                         if args.use_wandb:
                             wandb.log(info)
@@ -344,8 +344,6 @@ class TrainModel:
                 args.checkpoint_dir, "optimizer_aliasG.pth"))
             torch.save(self.aliasD.state_dict(), os.path.join(
                 args.checkpoint_dir, "optimizer_aliasD.pth"))
-            torch.save(self.criterionVGG.state_dict(), os.path.join(
-                args.checkpoint_dir, "criterionVGG.pth"))
             torch.save(self.optimizer_alias.state_dict(), os.path.join(
                 args.checkpoint_dir, "optimizer_alias.pth"))
             print("[+] Weights saved.")
@@ -368,8 +366,6 @@ class TrainModel:
                 args.checkpoint_dir, "aliasG.pth"), map_location=map_location))
             self.aliasD.load_state_dict(torch.load(os.path.join(
                 args.checkpoint_dir, "aliasD.pth"), map_location=map_location))
-            self.criterionVGG.load_state_dict(torch.load(os.path.join(
-                args.checkpoint_dir, "criterionVGG.pth"), map_location=map_location))
             self.optimizer_alias.load_state_dict(torch.load(os.path.join(
                 args.checkpoint_dir, "optimizer_alias.pth"), map_location=map_location))
             if args.local_rank == 0:
@@ -398,5 +394,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-                  
