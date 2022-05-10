@@ -18,6 +18,7 @@ from train_datasets import VITONDataLoader, VITONDataset
 from train_options import get_args
 from utils import (AverageMeter, cleanup, gen_noise, seed_everything,
                    set_grads, synchronize)
+from vgg import VGGLoss
 
 
 class TrainModel:
@@ -32,8 +33,17 @@ class TrainModel:
             self.device, memory_format=self.memory_format)
         self.loc_net = BoundedGridLocNet(args)
         args.semantic_nc = 7
-        self.alias = ALIASGenerator(args, input_nc=9).train().to(
+        
+        args.alias_layers_D = 6
+        self.aliasG = ALIASGenerator(args, input_nc=9).train().to(
             self.device, memory_format=self.memory_format)
+        self.aliasD = MultiscaleDiscriminator(args, args.alias_D_layers,
+                                            use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format) #3 channel discriminators for alias generator
+        
+        self.criterionVGG = VGGLoss(self.opt.gpu_ids)
+        
+        args.lambda_fm = 10
+        args.lambda_percept = 10
         args.semantic_nc = 13
 
         if args.distributed:
@@ -68,6 +78,10 @@ class TrainModel:
         self.optimizer_gmm = optim.Adam(
             self.gmm.parameters(), lr=0.0002, betas=(0.5, 0.999))
         self.optimizer_gmm.zero_grad(set_to_none=True)
+        
+        self.optimizer_alias = optim.Adam(list(self.aliasG.parameters(
+        )) + list(self.aliasD.parameters() + list(self.criterionVGG.parameters()), lr=(0.0001, 0.0004), betas=(0, 0.9))
+        self.optimizer_alias.zero_grad(set_to_none=True)
 
         self.scaler = amp.GradScaler(enabled=args.use_amp)
 
@@ -161,7 +175,7 @@ class TrainModel:
                 255*(warped_c.detach()+1)/2).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
         return gmm_loss.detach_(), img_log, warped_c, warped_cm
 
-    def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm):
+    def alias_train_step(self, args, img, img_agnostic, parse, pose, warped_c, warped_cm, get_img_log=False):
         # Part 3. Try-on synthesis
         with amp.autocast(enabled=args.use_amp):
             misalign_mask = parse[:, 3:4] - warped_cm
@@ -169,8 +183,50 @@ class TrainModel:
             parse_div = torch.cat((parse, misalign_mask), dim=1)
             parse_div[:, 3:4] -= misalign_mask
 
-            output = self.alias(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)
-            return
+            output = self.aliasG(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)            
+            
+            real_out = self.aliasD(torch.cat((parse, img), dim=1))
+            fake_out = self.aliasD(torch.cat((parse, output), dim=1))   
+            
+            alias_lossG += self.criterion_gan(fake_out, True)
+            alias_lossD = (self.criterion_gan(real_out, True)     # Treat real as real
+                         + self.criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.          
+            
+            # GAN feature matching loss
+            loss_G_GAN_Feat = 0
+            
+            feat_weights = 4.0 / (3 + 1) # 3 is number of layers in discriminator
+            D_weights = 1.0 / 2 #2 is num_D
+            for i in range(2): #num_D
+                for j in range(len(pred_fake[i])-1):
+                    loss_G_GAN_Feat += D_weights * feat_weights * \
+                        self.l1_loss(fake_out[i][j], real_out[i][j].detach()) * args.lambda_fm
+                    
+                    
+            VGG_loss = self.criterionVGG(img, output) 
+                * args.lambda_percept     
+            
+            alias_loss = alias_lossG + alias_lossD + loss_G_GAN_Feat + VGG_loss  
+            
+        gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
+        gradsG = autograd.grad(self.scaler.scale(alias_lossG), self.aliasG.parameters())
+        
+        gradsVGG = autograd.grad(self.scaler.scale(VGG_loss), self.criterionVGG.parameters(), retain_graph=True)
+
+        set_grads(gradsD, self.aliasD.parameters())
+        set_grads(gradsG, self.aliasG.parameters())
+        set_grads(gradsVGG, self.criterionVGG.parameters())
+        del gradsG, gradsD, gradsVGG
+
+        self.scaler.step(self.optimizer_alias)
+        self.optimizer_alias.zero_grad(set_to_none=True)
+                                          
+        img_log = {}
+            if get_img_log:                
+                img_log['output'] = (
+                    255*(output).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
+            
+        return alias_lossG.detach_(), alias_lossD.detach_(), loss_G_GAN_Feat.detach_(), VGG_loss.detach_(), img_log, output
 
     def train_epoch(self, args, epoch):
         if args.distributed:
@@ -178,6 +234,10 @@ class TrainModel:
         segG_losses = AverageMeter()
         segD_losses = AverageMeter()
         gmm_losses = AverageMeter()
+        aliasG_losses = AverageMeter()
+        aliasD_losses = AverageMeter()                        
+        G_GAN_Feat_losses = AverageMeter() 
+        VGG_losses = AverageMeter() 
         img_log = {}
         tsteps = len(self.train_loader.data_loader)
         with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
@@ -226,7 +286,14 @@ class TrainModel:
                                                                                  get_img_log=step == (tsteps-2))
                 gmm_losses.update(gmm_loss.detach_(), cloth.size(0))
 
-                self.alias_train_step(args, img, img_agnostic, parse, pose, warped_c, warped_cm)
+                alias_lossG, alias_lossD, loss_G_GAN_Feat, VGG_loss, alias_img_log, output = self.alias_train_step(args, img, img_agnostic, parse, pose, warped_c, warped_cm,
+                                                                                 get_img_log=step == (tsteps-2))
+                
+                                          
+                aliasG_losses.update(alias_lossG.detach_(), img_agnostic.size(0))       
+                aliasD_losses.update(alias_lossD.detach_(), img_agnostic.size(0)) 
+                G_GAN_Feat_losses.update(loss_G_GAN_Feat.detach_(), img_agnostic.size(0)) 
+                VGG_losses.update(VGG_loss.detach_(), img_agnostic.size(0))                                        
 
                 if args.local_rank == 0:
                     if not step % args.log_interval:
@@ -234,6 +301,10 @@ class TrainModel:
                             'SegG Loss': float(segG_losses.avg),
                             'SegD Loss': float(segD_losses.avg),
                             'GMM Loss': float(gmm_losses.avg),
+                            'AliasG Loss': float(aliasG_losses.avg)
+                            'AliasD Loss': float(aliasD_losses.avg)
+                            'Feature Matching Loss': float(G_GAN_Feat_losses.avg)
+                            'VGG Loss': float(VGG_losses.avg)
                         }
                         if args.use_wandb:
                             wandb.log(info)
@@ -241,6 +312,7 @@ class TrainModel:
                 self.scaler.update()
                 img_log.update(seg_img_log)
                 img_log.update(gmm_img_log)
+                img_log.update(alias_img_log)
         return img_log
 
     def train_loop(self, args):
@@ -268,8 +340,14 @@ class TrainModel:
                 args.checkpoint_dir, "gmm.pth"))
             torch.save(self.optimizer_seg.state_dict(), os.path.join(
                 args.checkpoint_dir, "optimizer_seg.pth"))
-            torch.save(self.optimizer_gmm.state_dict(), os.path.join(
-                args.checkpoint_dir, "optimizer_gmm.pth"))
+            torch.save(self.aliasG.state_dict(), os.path.join(
+                args.checkpoint_dir, "optimizer_aliasG.pth"))
+            torch.save(self.aliasD.state_dict(), os.path.join(
+                args.checkpoint_dir, "optimizer_aliasD.pth"))
+            torch.save(self.criterionVGG.state_dict(), os.path.join(
+                args.checkpoint_dir, "criterionVGG.pth"))
+            torch.save(self.optimizer_alias.state_dict(), os.path.join(
+                args.checkpoint_dir, "optimizer_alias.pth"))
             print("[+] Weights saved.")
 
     def load_models(self, args):
@@ -286,6 +364,14 @@ class TrainModel:
                 args.checkpoint_dir, "optimizer_seg.pth"), map_location=map_location))
             self.optimizer_gmm.load_state_dict(torch.load(os.path.join(
                 args.checkpoint_dir, "optimizer_gmm.pth"), map_location=map_location))
+            self.aliasG.load_state_dict(torch.load(os.path.join(
+                args.checkpoint_dir, "aliasG.pth"), map_location=map_location))
+            self.aliasD.load_state_dict(torch.load(os.path.join(
+                args.checkpoint_dir, "aliasD.pth"), map_location=map_location))
+            self.criterionVGG.load_state_dict(torch.load(os.path.join(
+                args.checkpoint_dir, "criterionVGG.pth"), map_location=map_location))
+            self.optimizer_alias.load_state_dict(torch.load(os.path.join(
+                args.checkpoint_dir, "optimizer_alias.pth"), map_location=map_location))
             if args.local_rank == 0:
                 print("[+] Weights loaded.")
         except FileNotFoundError as e:
