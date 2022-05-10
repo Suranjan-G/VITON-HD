@@ -86,7 +86,7 @@ class TrainModel:
         self.optimizer_gmm.zero_grad(set_to_none=True)
         
         self.optimizer_alias = optim.Adam(list(self.aliasG.parameters(
-        )) + list(self.aliasD.parameters() + list(self.criterionVGG.parameters()), lr=(0.0001, 0.0004), betas=(0, 0.9))
+        )) + list(self.aliasD.parameters()), lr=(0.0001, 0.0004), betas=(0, 0.9))
         self.optimizer_alias.zero_grad(set_to_none=True)
 
         self.scaler = amp.GradScaler(enabled=args.use_amp)
@@ -209,10 +209,10 @@ class TrainModel:
                         self.l1_loss(fake_out[i][j], real_out[i][j].detach()) * args.lambda_fm
                     
                     
-            VGG_loss = self.criterionVGG(img, output) 
+            vggloss = self.criterionVGG(img, output) 
                 * args.lambda_percept     
             
-            alias_loss = alias_lossG + alias_lossD + loss_G_GAN_Feat + VGG_loss  
+            alias_loss = alias_lossG + alias_lossD + loss_G_GAN_Feat + vggloss  
             
         gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
         gradsG = autograd.grad(self.scaler.scale(alias_lossG), self.aliasG.parameters())
@@ -238,8 +238,8 @@ class TrainModel:
         gmm_losses = AverageMeter()
         aliasG_losses = AverageMeter()
         aliasD_losses = AverageMeter()                        
-        G_GAN_Feat_losses = AverageMeter() 
-        VGG_losses = AverageMeter() 
+        alias_GAN_Feat_losses = AverageMeter() 
+         
         img_log = {}
         tsteps = len(self.train_loader.data_loader)
         with tqdm(self.train_loader.data_loader, desc=f"Epoch {epoch:>2}") as pbar:
@@ -294,7 +294,7 @@ class TrainModel:
                                           
                 aliasG_losses.update(alias_lossG.detach_(), img_agnostic.size(0))       
                 aliasD_losses.update(alias_lossD.detach_(), img_agnostic.size(0)) 
-                G_GAN_Feat_losses.update(loss_G_GAN_Feat.detach_(), img_agnostic.size(0))                                         
+                alias_GAN_Feat_losses.update(loss_G_GAN_Feat.detach_(), img_agnostic.size(0))                                         
 
                 if args.local_rank == 0:
                     if not step % args.log_interval:
@@ -304,7 +304,7 @@ class TrainModel:
                             'GMM Loss': float(gmm_losses.avg),
                             'AliasG Loss': float(aliasG_losses.avg)
                             'AliasD Loss': float(aliasD_losses.avg)
-                            'Feature Matching Loss': float(G_GAN_Feat_losses.avg)
+                            'Feature Matching Loss': float(alias_GAN_Feat_losses.avg)
                         }
                         if args.use_wandb:
                             wandb.log(info)
