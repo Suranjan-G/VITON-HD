@@ -18,7 +18,7 @@ from train_datasets import VITONDataLoader, VITONDataset
 from train_options import get_args
 from utils import (AverageMeter, cleanup, gen_noise, seed_everything,
                    set_grads, synchronize)
-from vgg import VGGLoss
+from vggloss import VGGLoss
 
 
 class TrainModel:
