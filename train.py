@@ -1,6 +1,6 @@
 import os
-
 import numpy as np
+
 import torch
 import torch.distributed as dist
 import torch.optim as optim
@@ -35,7 +35,7 @@ class TrainModel:
         self.loc_net = BoundedGridLocNet(args)
         args.semantic_nc = 7
         
-        args.alias_layers_D = 6
+        args.alias_layers_D = 10
         self.aliasG = ALIASGenerator(args, input_nc=9).train().to(
             self.device, memory_format=self.memory_format)
         self.aliasD = MultiscaleDiscriminator(args, args.alias_D_layers,
@@ -85,9 +85,13 @@ class TrainModel:
             self.gmm.parameters(), lr=0.0002, betas=(0.5, 0.999))
         self.optimizer_gmm.zero_grad(set_to_none=True)
         
-        self.optimizer_alias = optim.Adam(list(self.aliasG.parameters(
-        )) + list(self.aliasD.parameters()), lr=(0.0001, 0.0004), betas=(0, 0.9))
-        self.optimizer_alias.zero_grad(set_to_none=True)
+        self.optimizer_aliasD = optim.Adam(self.aliasD.parameters(
+        ), lr=0.0004, betas=(0, 0.9))
+        self.optimizer_aliasD.zero_grad(set_to_none=True)
+        
+        self.optimizer_aliasG = optim.Adam(self.aliasG.parameters(
+        ), lr=0.0001, betas=(0, 0.9))
+        self.optimizer_aliasG.zero_grad(set_to_none=True)
 
         self.scaler = amp.GradScaler(enabled=args.use_amp)
 
@@ -187,14 +191,14 @@ class TrainModel:
             misalign_mask = parse[:, 3:4] - warped_cm
             misalign_mask = misalign_mask.clip_(min=0.0)
             parse_div = torch.cat((parse, misalign_mask), dim=1)
-            parse_div[:, 3:4] -= misalign_mask
+            parse_div[:, 3:4] -= misalign_mask #8
 
             output = self.aliasG(torch.cat((img_agnostic, pose, warped_c), dim=1), parse, parse_div, misalign_mask)            
             
             real_out = self.aliasD(torch.cat((parse, img), dim=1))
             fake_out = self.aliasD(torch.cat((parse, output), dim=1))   
             
-            alias_lossG += self.criterion_gan(fake_out, True)
+            alias_lossG = self.criterion_gan(fake_out, True)
             alias_lossD = (self.criterion_gan(real_out, True)     # Treat real as real
                          + self.criterion_gan(fake_out, False))   # and fake as fake to train Discriminator.          
             
@@ -210,23 +214,25 @@ class TrainModel:
                     
                     
             vggloss = self.criterionVGG(img, output) 
-                * args.lambda_percept     
-            
-            alias_loss = alias_lossG + alias_lossD + loss_G_GAN_Feat + vggloss  
+                * args.lambda_percept             
+             
             
         gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
-        gradsG = autograd.grad(self.scaler.scale(alias_lossG), self.aliasG.parameters())
+        gradsG = autograd.grad(self.scaler.scale(alias_lossG + vggloss + loss_G_GAN_Feat), self.aliasG.parameters())
 
         set_grads(gradsD, self.aliasD.parameters())
         set_grads(gradsG, self.aliasG.parameters())
         del gradsG, gradsD
 
         self.scaler.step(self.optimizer_alias)
-        self.optimizer_alias.zero_grad(set_to_none=True)
+        self.optimizer_aliasG.zero_grad(set_to_none=True)
+        self.optimizer_aliasD.zero_grad(set_to_none=True)
                                           
         img_log = {}
             if get_img_log:                
                 img_log['output'] = (255*(output)).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
+                
+       
             
         return alias_lossG.detach_(), alias_lossD.detach_(), loss_G_GAN_Feat.detach_(), img_log, output
 
@@ -238,7 +244,8 @@ class TrainModel:
         gmm_losses = AverageMeter()
         aliasG_losses = AverageMeter()
         aliasD_losses = AverageMeter()                        
-        alias_GAN_Feat_losses = AverageMeter() 
+        alias_GAN_Feat_losses = AverageMeter()
+      
          
         img_log = {}
         tsteps = len(self.train_loader.data_loader)
@@ -344,8 +351,6 @@ class TrainModel:
                 args.checkpoint_dir, "optimizer_aliasG.pth"))
             torch.save(self.aliasD.state_dict(), os.path.join(
                 args.checkpoint_dir, "optimizer_aliasD.pth"))
-            torch.save(self.optimizer_alias.state_dict(), os.path.join(
-                args.checkpoint_dir, "optimizer_alias.pth"))
             print("[+] Weights saved.")
 
     def load_models(self, args):
@@ -366,8 +371,6 @@ class TrainModel:
                 args.checkpoint_dir, "aliasG.pth"), map_location=map_location))
             self.aliasD.load_state_dict(torch.load(os.path.join(
                 args.checkpoint_dir, "aliasD.pth"), map_location=map_location))
-            self.optimizer_alias.load_state_dict(torch.load(os.path.join(
-                args.checkpoint_dir, "optimizer_alias.pth"), map_location=map_location))
             if args.local_rank == 0:
                 print("[+] Weights loaded.")
         except FileNotFoundError as e:
