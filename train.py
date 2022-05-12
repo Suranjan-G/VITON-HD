@@ -1,6 +1,6 @@
 import os
-import numpy as np
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.optim as optim
@@ -38,10 +38,11 @@ class TrainModel:
         args.alias_layers_D = 10
         self.aliasG = ALIASGenerator(args, input_nc=9).train().to(
             self.device, memory_format=self.memory_format)
-        self.aliasD = MultiscaleDiscriminator(args, args.alias_D_layers,
+        self.aliasD = MultiscaleDiscriminator(args, args.alias_layers_D,
                                             use_sigmoid=args.no_lsgan).train().to(self.device, memory_format=self.memory_format) #3 channel discriminators for alias generator
         
-        self.criterionVGG = VGGLoss(self.opt.gpu_ids)
+        self.criterionVGG = VGGLoss(args).train().to(
+            self.device, memory_format=self.memory_format)
         
         args.lambda_fm = 10
         args.lambda_percept = 10
@@ -213,8 +214,7 @@ class TrainModel:
                         self.l1_loss(fake_out[i][j], real_out[i][j].detach()) * args.lambda_fm
                     
                     
-            vggloss = self.criterionVGG(img, output) 
-                * args.lambda_percept             
+            vggloss = self.criterionVGG(img, output) * args.lambda_percept             
              
             
         gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
@@ -229,7 +229,7 @@ class TrainModel:
         self.optimizer_aliasD.zero_grad(set_to_none=True)
                                           
         img_log = {}
-            if get_img_log:                
+        if get_img_log:                
                 img_log['output'] = (255*(output)).type(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
                 
        
@@ -258,8 +258,9 @@ class TrainModel:
                 parse_target_down_idx = batch['parse_target_down']
                 parse_agnostic_idx = batch['parse_agnostic']
                 pose = batch['pose']
-                cloth = batch['cloth']
+                cloth = batch['cloth']                
                 cloth_mask = batch['cloth_mask']
+                cloth = cloth.permute(0,3,1,2)
                 cloth = ((cloth+1) * cloth_mask) - 1    # mask out the cloth
                 parse_target_down = torch.empty(parse_target_down_idx.size(0), args.semantic_nc, 256, 192,
                                                 dtype=torch.float, device=self.device, memory_format=self.memory_format).fill_(0.)
@@ -309,8 +310,8 @@ class TrainModel:
                             'SegG Loss': float(segG_losses.avg),
                             'SegD Loss': float(segD_losses.avg),
                             'GMM Loss': float(gmm_losses.avg),
-                            'AliasG Loss': float(aliasG_losses.avg)
-                            'AliasD Loss': float(aliasD_losses.avg)
+                            'AliasG Loss': float(aliasG_losses.avg),
+                            'AliasD Loss': float(aliasD_losses.avg),
                             'Feature Matching Loss': float(alias_GAN_Feat_losses.avg)
                         }
                         if args.use_wandb:
