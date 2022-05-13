@@ -215,22 +215,21 @@ class TrainModel:
             feat_weights = 4.0 / (3 + 1) # 3 is number of layers in discriminator
             D_weights = 1.0 / 2 #2 is num_D
             for i in range(2): #num_D
-                for j in range(len(fake_out[i])-1):
+                for j in range(len(fake_out[i])):
                     loss_G_GAN_Feat += D_weights * feat_weights * \
                         self.l1_loss(fake_out[i][j], real_out[i][j].detach()) * args.lambda_fm
-                    
-                    
+                  
             vggloss = self.criterionVGG(img, output) * args.lambda_percept             
              
         alias_gen_loss = alias_lossG + vggloss + loss_G_GAN_Feat
-
+        
         gradsD = autograd.grad(self.scaler.scale(alias_lossD), self.aliasD.parameters(), retain_graph=True)
         gradsG = autograd.grad(self.scaler.scale(alias_gen_loss), self.aliasG.parameters()) 
 
-        # self.scaler.scale(alias_lossD).backward()
+        
         self.scaler.step(self.optimizer_aliasD) 
 
-        # self.scaler.scale(alias_gen_loss).backward()
+        
         self.scaler.step(self.optimizer_aliasG)                    
 
         set_grads(gradsD, self.aliasD.parameters())
